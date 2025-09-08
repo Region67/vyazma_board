@@ -21,39 +21,37 @@ database.init_db()
 user_photos = {}
 
 # Клавиатуры
+# Главное меню
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Подать объявление")],
-        [KeyboardButton(text="🔍 Все объявления")],
         [KeyboardButton(text="🔍 Поиск по категориям")]
     ],
     resize_keyboard=True
 )
 
+# Категории в 2 столбца
+categories_list = [
+    "🏠 Недвижимость", "🚗 Транспорт",
+    "💼 Работа/Услуги", "🛒 Вещи",
+    "🐶 Отдам даром", "🎓 Обучение"
+]
+
+# Создание клавиатуры категорий в 2 столбца
+categories_kb_rows = []
+for i in range(0, len(categories_list), 2):
+    row = [KeyboardButton(text=cat) for cat in categories_list[i:i+2]]
+    categories_kb_rows.append(row)
+categories_kb_rows.append([KeyboardButton(text="⬅️ Назад")])
+
 categories_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🏠 Недвижимость")],
-        [KeyboardButton(text="🚗 Транспорт")],
-        [KeyboardButton(text="💼 Работа/Услуги")],
-        [KeyboardButton(text="🛒 Вещи")],
-        [KeyboardButton(text="🐶 Отдам даром")],
-        [KeyboardButton(text="🎓 Обучение")],
-        [KeyboardButton(text="⬅️ Назад")]
-    ],
+    keyboard=categories_kb_rows,
     resize_keyboard=True
 )
 
-# Клавиатура для выбора категории поиска
+# Клавиатура для выбора категории поиска (такая же, как и для подачи)
 search_categories_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🏠 Недвижимость")],
-        [KeyboardButton(text="🚗 Транспорт")],
-        [KeyboardButton(text="💼 Работа/Услуги")],
-        [KeyboardButton(text="🛒 Вещи")],
-        [KeyboardButton(text="🐶 Отдам даром")],
-        [KeyboardButton(text="🎓 Обучение")],
-        [KeyboardButton(text="⬅️ Назад")]
-    ],
+    keyboard=categories_kb_rows, # Используем ту же раскладку
     resize_keyboard=True
 )
 
@@ -84,15 +82,21 @@ async def new_ad_start(message: Message, state: FSMContext):
     await message.answer("Выберите категорию:", reply_markup=categories_kb)
     await state.set_state(AdStates.category)
 
-# Категория
+# Категория (выбор при подаче объявления)
 @dp.message(StateFilter(AdStates.category))
 async def process_category(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
         await state.clear()
         await message.answer("Главное меню", reply_markup=main_menu)
         return
+    # Проверяем, что выбранная категория действительно из списка
+    if message.text not in categories_list:
+        await message.answer("Пожалуйста, выберите категорию из списка.", reply_markup=categories_kb)
+        return
+
     await state.update_data(category=message.text)
-    await message.answer("Введите заголовок объявления:")
+    # Скрываем клавиатуру категорий, показываем обычное меню
+    await message.answer("Введите заголовок объявления:", reply_markup=main_menu)
     await state.set_state(AdStates.title)
 
 # Заголовок
@@ -151,46 +155,7 @@ async def process_contact(message: Message, state: FSMContext):
     if user_id in user_photos:
         del user_photos[user_id]
 
-# Все объявления
-@dp.message(F.text == "🔍 Все объявления")
-async def show_ads(message: Message):
-    try:
-        ads = database.get_all_ads()
-        if not ads:
-            await message.answer("Пока нет объявлений.", reply_markup=main_menu)
-            return
-        
-        await message.answer("Последние объявления:", reply_markup=main_menu)
-        
-        for i, ad in enumerate(ads[:5]):  # Ограничиваем 5 объявлениями
-            text = f"""
-📌 {ad[3]}
-{ad[4]}
-
-📞 Контакт: {ad[6]}
-📅 Дата: {ad[7]}
-            """
-            await message.answer(text)
-            photo_ids = ad[5]
-            if photo_ids:
-                photo_list = photo_ids.split(',')
-                # Ограничиваем количество фото до 10 (предел Telegram для группы)
-                media = [types.InputMediaPhoto(media=pid) for pid in photo_list[:10]]
-                try:
-                    await bot.send_media_group(chat_id=message.chat.id, media=media)
-                except Exception as e:
-                    logging.error(f"Ошибка при отправке фото: {e}")
-                
-                # Пауза между отправкой фото
-                await asyncio.sleep(0.5)
-            
-            # Пауза между объявлениями
-            if i < len(ads[:5]) - 1:  # Не делать паузу после последнего
-                await asyncio.sleep(0.5)
-                
-    except Exception as e:
-        logging.error(f"Ошибка в show_ads: {e}")
-        await message.answer("Произошла ошибка при загрузке объявлений. Попробуйте позже.", reply_markup=main_menu)
+# --- УДАЛЕНО: Обработчик "🔍 Все объявления" ---
 
 # Поиск по категориям - кнопка
 @dp.message(F.text == "🔍 Поиск по категориям")
@@ -206,6 +171,14 @@ async def process_search_category(message: Message, state: FSMContext):
         await message.answer("Главное меню", reply_markup=main_menu)
         return
     
+    # Проверяем, что выбранная категория действительно из списка
+    if message.text not in categories_list:
+         # Если пользователь ввел что-то другое, например, название категории текстом,
+         # можно попробовать найти совпадение или просто попросить выбрать снова.
+         # Сейчас просто покажем клавиатуру снова.
+         await message.answer("Пожалуйста, выберите категорию из списка.", reply_markup=search_categories_kb)
+         return
+
     category = message.text
     await state.update_data(search_category=category)
     
