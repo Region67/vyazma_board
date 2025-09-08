@@ -1,2 +1,2 @@
 # config.py
-API_TOKEN = '8479297397:AAGZVPvqn7BKm8BIZlauVycSMLfy3MCYBwo'  # Вставь сюда токен
+API_TOKEN = '8479297397:AAH5LpwExgFwiNrn0xrcm1-3ArxggAos5vg'  # Вставь сюда токен
