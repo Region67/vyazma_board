@@ -129,7 +129,6 @@ async def process_contact(message: Message, state: FSMContext):
     if user_id in user_photos:
         del user_photos[user_id]
 
-# Все объявления
 @dp.message(F.text == "🔍 Все объявления")
 async def show_ads(message: Message):
     ads = database.get_all_ads()
@@ -150,6 +149,8 @@ async def show_ads(message: Message):
             photo_list = photo_ids.split(',')
             media = [types.InputMediaPhoto(media=pid) for pid in photo_list]
             await bot.send_media_group(chat_id=message.chat.id, media=media)
+            await asyncio.sleep(0.5)  # 👈 Пауза между фото
+        await asyncio.sleep(0.3)  # 👈 Пауза между объявлениями
 
 # Запуск
 async def main():
