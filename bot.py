@@ -67,7 +67,7 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def start(message: Message):
     await message.answer(
-        "📢 Добро пожаловать в [Город] Объявления!\nВыберите действие:",
+        "📢 Добро пожаловать в Объявленияu города Вязьма!\nВыберите действие:",
         reply_markup=main_menu
     )
 
@@ -101,7 +101,7 @@ async def process_title(message: Message, state: FSMContext):
 async def process_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text)
     user_photos[message.from_user.id] = []
-    await message.answer("Загрузите фото (до 3 шт, по одному). Когда закончите — отправьте любой текст.")
+    await message.answer("Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — отправьте любой текст.")
     await state.set_state(AdStates.photo)
 
 @dp.message(StateFilter(AdStates.photo), F.photo)
