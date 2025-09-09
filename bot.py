@@ -4,7 +4,7 @@ from aiogram.filters import Command, StateFilter, CommandObject
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import logging
 import aiogram.exceptions  # Для обработки TelegramRetryAfter
@@ -84,11 +84,15 @@ class AdStates(StatesGroup):
     description = State()
     photo = State()
     contact = State()
-    browse_category = State() # Новое состояние для просмотра по категориям
+    browse_category = State()
     my_ads_list = State()
     my_ad_selected = State()
     my_ad_edit_field = State()
     my_ad_edit_value = State()
+    # --- Состояния для комментариев ---
+    viewing_ad = State()
+    viewing_comments = State()
+    entering_comment = State()
 
 # --- Инициализация бота ---
 bot = Bot(token=config.API_TOKEN)
@@ -105,7 +109,7 @@ async def start(message: Message):
 
     logging.info(f"Пользователь {user_id} запустил бота.")
     # Небольшая пауза перед отправкой, чтобы избежать флуда при быстром переподключении
-    await asyncio.sleep(0.1) 
+    await asyncio.sleep(0.1)
     main_menu = create_main_menu()
     try:
         await message.answer(
@@ -227,7 +231,7 @@ async def process_contact(message: Message, state: FSMContext):
         if user_id in user_photos:
             del user_photos[user_id]
         await message.answer("✅ Объявление успешно опубликовано!", reply_markup=main_menu)
-        
+
         # --- Уведомление админу о новом объявлении ---
         try:
             await bot.send_message(
@@ -443,53 +447,223 @@ async def my_ads_select(message: Message, state: FSMContext):
             await message.answer("❌ Объявление не найдено. Пожалуйста, выберите из списка.")
             return
 
-        await state.update_data(selected_ad=selected_ad)
-        await state.set_state(AdStates.my_ad_selected)
+        # Сохраняем ID объявления в состоянии для дальнейшего использования
+        await state.update_data(current_ad_id=selected_ad[0])
 
-        text = f"""
+        # Формируем текст объявления
+        ad_text = f"""
 🆔 ID: {selected_ad[0]}
 📌 Категория: {selected_ad[2]}
 🏷️ Заголовок: {selected_ad[3]}
-📝 Описание: {selected_ad[4][:100]}...
+📝 Описание: {selected_ad[4]}
 📞 Контакт: {selected_ad[6]}
 📅 Дата: {selected_ad[7]}
         """
-        await message.answer(text)
+        await message.answer(ad_text)
 
-        actions_kb = ReplyKeyboardMarkup(
+        # Создаем клавиатуру с действиями для объявления
+        ad_actions_kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="✏️ Редактировать"), KeyboardButton(text="🗑️ Удалить")],
-                [KeyboardButton(text="⬅️ Назад")],
+                [KeyboardButton(text="💬 Комментарии"), KeyboardButton(text="✏️ Редактировать")],
+                [KeyboardButton(text="🗑️ Удалить"), KeyboardButton(text="⬅️ Назад")],
             ],
             resize_keyboard=True
         )
-        await message.answer("Выберите действие:", reply_markup=actions_kb)
+        await message.answer("Выберите действие:", reply_markup=ad_actions_kb)
+        # Устанавливаем состояние просмотра объявления
+        await state.set_state(AdStates.viewing_ad)
 
     except (ValueError, IndexError, StopIteration) as e:
         logging.error(f"Ошибка в my_ads_select: {e}")
         await message.answer("❌ Неверный формат. Пожалуйста, выберите объявление из списка.")
 
-@dp.message(StateFilter(AdStates.my_ad_selected))
-async def my_ad_action(message: Message, state: FSMContext):
+# --- Просмотр комментариев к объявлению ---
+@dp.message(StateFilter(AdStates.viewing_ad), F.text == "💬 Комментарии")
+async def view_comments(message: Message, state: FSMContext):
+    """Показывает комментарии к текущему объявлению."""
+    data = await state.get_data()
+    ad_id = data.get('current_ad_id')
+
+    if not ad_id:
+        await message.answer("❌ Ошибка. Не удалось определить объявление.")
+        # Возвращаем в главное меню или к выбору объявления
+        main_menu = create_main_menu()
+        await message.answer("Возврат в главное меню.", reply_markup=main_menu)
+        await state.clear()
+        return
+
+    try:
+        comments = database.get_comments_by_ad_id(ad_id)
+    except Exception as e:
+        logging.error(f"Ошибка при получении комментариев для объявления {ad_id}: {e}")
+        await message.answer("❌ Произошла ошибка при получении комментариев.")
+        return
+
+    if not comments:
+        await message.answer("📭 Пока нет комментариев. Будьте первым!")
+    else:
+        await message.answer("💬 Комментарии к объявлению:")
+        for comment in comments[-10:]: # Показываем последние 10
+            # comment[5] - username, comment[3] - text, comment[4] - created_at
+            username_display = f"@{comment[5]}" if comment[5] else f"ID:{comment[2]}"
+            comment_text = f"{username_display} ({comment[4]}):\n{comment[3]}"
+            await message.answer(comment_text)
+            await asyncio.sleep(0.1) # Минимальная пауза
+
+    # Клавиатура для добавления комментария или возврата
+    comment_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✍️ Написать комментарий")],
+            [KeyboardButton(text="⬅️ Назад к объявлению")],
+        ],
+        resize_keyboard=True
+    )
+    await message.answer("Выберите действие:", reply_markup=comment_kb)
+    # Переходим в состояние просмотра комментариев
+    await state.set_state(AdStates.viewing_comments)
+
+# --- Ввод нового комментария ---
+@dp.message(StateFilter(AdStates.viewing_comments), F.text == "✍️ Написать комментарий")
+async def prompt_new_comment(message: Message, state: FSMContext):
+    """Предлагает пользователю ввести текст комментария."""
+    await message.answer("Введите ваш комментарий (до 200 символов):", reply_markup=cancel_kb)
+    await state.set_state(AdStates.entering_comment)
+
+@dp.message(StateFilter(AdStates.entering_comment))
+async def process_new_comment(message: Message, state: FSMContext):
+    """Обрабатывает введенный пользователем комментарий."""
+    if message.text == "⬅️ Назад":
+        # Возвращаемся к просмотру комментариев
+        await view_comments(message, state) # Повторно вызываем, чтобы обновить список
+        return
+
+    comment_text = message.text.strip()
+    if not comment_text:
+        await message.answer("Комментарий не может быть пустым. Пожалуйста, введите текст.")
+        return
+    if len(comment_text) > 200:
+        await message.answer("Комментарий слишком длинный (максимум 200 символов). Пожалуйста, сократите.")
+        return
+
+    data = await state.get_data()
+    ad_id = data.get('current_ad_id')
+    user_id = message.from_user.id
+    created_at = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+    if not ad_id:
+        await message.answer("❌ Ошибка. Не удалось определить объявление.")
+        main_menu = create_main_menu()
+        await message.answer("Возврат в главное меню.", reply_markup=main_menu)
+        await state.clear()
+        return
+
+    try:
+        database.add_comment(ad_id, user_id, comment_text, created_at)
+        await message.answer("✅ Комментарий добавлен!")
+
+        # --- Уведомление автору объявления (ОПЦИОНАЛЬНО) ---
+        try:
+            ad = database.get_ad_by_id(ad_id)
+            if ad and ad[1] != user_id: # ad[1] - user_id автора объявления
+                notification_text = f"🔔 Новый комментарий к вашему объявлению #{ad_id}:\n{comment_text[:50]}..."
+                await bot.send_message(chat_id=ad[1], text=notification_text)
+                logging.info(f"Уведомление о комментарии отправлено автору {ad[1]}.")
+        except aiogram.exceptions.TelegramForbiddenError:
+            logging.info(f"Не удалось уведомить автора {ad[1]}: запрещено (бот заблокирован).")
+        except Exception as e:
+            logging.error(f"Ошибка при уведомлении автора {ad[1]}: {e}")
+        # ---
+
+    except Exception as e:
+        logging.error(f"Ошибка при добавлении комментария к объявлению {ad_id}: {e}")
+        await message.answer("❌ Произошла ошибка при добавлении комментария.")
+
+    # Возвращаемся к просмотру комментариев (обновленному)
+    await view_comments(message, state)
+
+# --- Возврат к просмотру объявления из комментариев ---
+@dp.message(StateFilter(AdStates.viewing_comments), F.text == "⬅️ Назад к объявлению")
+async def back_to_ad_from_comments(message: Message, state: FSMContext):
+    """Возвращает к просмотру основной информации об объявлении."""
+    data = await state.get_data()
+    ad_id = data.get('current_ad_id')
+
+    if not ad_id:
+        await message.answer("❌ Ошибка. Не удалось определить объявление.")
+        main_menu = create_main_menu()
+        await message.answer("Возврат в главное меню.", reply_markup=main_menu)
+        await state.clear()
+        return
+
+    try:
+        # Получаем объявление из БД
+        ad = database.get_ad_by_id(ad_id)
+        if not ad:
+             await message.answer("❌ Объявление не найдено.")
+             main_menu = create_main_menu()
+             await message.answer("Возврат в главное меню.", reply_markup=main_menu)
+             await state.clear()
+             return
+
+        # Показываем объявление снова
+        ad_text = f"""
+🆔 ID: {ad[0]}
+📌 Категория: {ad[2]}
+🏷️ Заголовок: {ad[3]}
+📝 Описание: {ad[4]}
+📞 Контакт: {ad[6]}
+📅 Дата: {ad[7]}
+        """
+        await message.answer(ad_text)
+
+        # Создаем клавиатуру с действиями для объявления
+        ad_actions_kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="💬 Комментарии"), KeyboardButton(text="✏️ Редактировать")],
+                [KeyboardButton(text="🗑️ Удалить"), KeyboardButton(text="⬅️ Назад")],
+            ],
+            resize_keyboard=True
+        )
+        await message.answer("Выберите действие:", reply_markup=ad_actions_kb)
+        # Возвращаемся в состояние просмотра объявления
+        await state.set_state(AdStates.viewing_ad)
+
+    except Exception as e:
+        logging.error(f"Ошибка при возврате к объявлению {ad_id}: {e}")
+        await message.answer("❌ Произошла ошибка.")
+        main_menu = create_main_menu()
+        await message.answer("Возврат в главное меню.", reply_markup=main_menu)
+        await state.clear()
+
+# --- Возврат к просмотру объявления из самого объявления ---
+# (Этот обработчик нужен, если пользователь был в viewing_ad и нажал "⬅️ Назад")
+@dp.message(StateFilter(AdStates.viewing_ad), F.text == "⬅️ Назад")
+async def back_to_my_ads_from_ad(message: Message, state: FSMContext):
+    """Возвращает к списку 'Мои объявления'."""
+    await my_ads_start(message, state) # Повторно вызываем, чтобы показать список
+
+# --- Действия с выбранным объявлением ---
+@dp.message(StateFilter(AdStates.viewing_ad))
+async def my_ad_action_from_view(message: Message, state: FSMContext):
+    """Обрабатывает действия с объявления (редактирование, удаление) из состояния просмотра."""
     if message.text == "⬅️ Назад":
         await my_ads_start(message, state)
         return
 
     if message.text == "🗑️ Удалить":
         data = await state.get_data()
-        selected_ad = data.get('selected_ad')
-        if selected_ad:
-            ad_id = selected_ad[0]
+        ad_id = data.get('current_ad_id')
+        if ad_id:
             try:
                 database.delete_ad(ad_id)
-                # Обновляем главное меню после удаления
                 main_menu = create_main_menu()
                 await message.answer(f"✅ Объявление #{ad_id} удалено!", reply_markup=main_menu)
+                await state.clear()
             except Exception as e:
                 logging.error(f"Ошибка при удалении объявления #{ad_id}: {e}")
                 main_menu = create_main_menu()
                 await message.answer("❌ Произошла ошибка при удалении.", reply_markup=main_menu)
-            await state.clear()
+                await state.clear()
         else:
             main_menu = create_main_menu()
             await message.answer("❌ Ошибка. Попробуйте снова.", reply_markup=main_menu)
@@ -510,30 +684,41 @@ async def my_ad_action(message: Message, state: FSMContext):
 
     await message.answer("Пожалуйста, выберите действие.")
 
+# --- Выбор поля для редактирования ---
 @dp.message(StateFilter(AdStates.my_ad_edit_field))
 async def my_ad_edit_field(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
         data = await state.get_data()
-        selected_ad = data.get('selected_ad')
-        if selected_ad:
-            text = f"""
-🆔 ID: {selected_ad[0]}
-📌 Категория: {selected_ad[2]}
-🏷️ Заголовок: {selected_ad[3]}
-📝 Описание: {selected_ad[4][:100]}...
-📞 Контакт: {selected_ad[6]}
-📅 Дата: {selected_ad[7]}
-            """
-            await message.answer(text)
-            actions_kb = ReplyKeyboardMarkup(
-                keyboard=[
-                    [KeyboardButton(text="✏️ Редактировать"), KeyboardButton(text="🗑️ Удалить")],
-                    [KeyboardButton(text="⬅️ Назад")],
-                ],
-                resize_keyboard=True
-            )
-            await message.answer("Выберите действие:", reply_markup=actions_kb)
-            await state.set_state(AdStates.my_ad_selected)
+        ad_id = data.get('current_ad_id')
+        if ad_id:
+            try:
+                ad = database.get_ad_by_id(ad_id)
+                if ad:
+                    ad_text = f"""
+🆔 ID: {ad[0]}
+📌 Категория: {ad[2]}
+🏷️ Заголовок: {ad[3]}
+📝 Описание: {ad[4]}
+📞 Контакт: {ad[6]}
+📅 Дата: {ad[7]}
+                    """
+                    await message.answer(ad_text)
+                    ad_actions_kb = ReplyKeyboardMarkup(
+                        keyboard=[
+                            [KeyboardButton(text="💬 Комментарии"), KeyboardButton(text="✏️ Редактировать")],
+                            [KeyboardButton(text="🗑️ Удалить"), KeyboardButton(text="⬅️ Назад")],
+                        ],
+                        resize_keyboard=True
+                    )
+                    await message.answer("Выберите действие:", reply_markup=ad_actions_kb)
+                    await state.set_state(AdStates.viewing_ad)
+                else:
+                    raise ValueError("Объявление не найдено")
+            except Exception as e:
+                logging.error(f"Ошибка при возврате к объявлению {ad_id}: {e}")
+                main_menu = create_main_menu()
+                await message.answer("❌ Ошибка.", reply_markup=main_menu)
+                await state.clear()
         else:
             main_menu = create_main_menu()
             await message.answer("❌ Ошибка.", reply_markup=main_menu)
@@ -551,20 +736,30 @@ async def my_ad_edit_field(message: Message, state: FSMContext):
         await state.set_state(AdStates.my_ad_edit_value)
 
         data = await state.get_data()
-        selected_ad = data.get('selected_ad')
-        current_value = ""
-        if selected_ad:
-            if field_name == "title":
-                current_value = selected_ad[3]
-            elif field_name == "description":
-                current_value = selected_ad[4]
-            elif field_name == "contact":
-                current_value = selected_ad[6]
-
-        await message.answer(f"Введите новое значение для '{message.text}':\n(Текущее: {current_value})", reply_markup=cancel_kb)
+        ad_id = data.get('current_ad_id')
+        if ad_id:
+            try:
+                ad = database.get_ad_by_id(ad_id)
+                if ad:
+                    current_value = ""
+                    if field_name == "title":
+                        current_value = ad[3]
+                    elif field_name == "description":
+                        current_value = ad[4]
+                    elif field_name == "contact":
+                        current_value = ad[6]
+                    await message.answer(f"Введите новое значение для '{message.text}':\n(Текущее: {current_value})", reply_markup=cancel_kb)
+                else:
+                    raise ValueError("Объявление не найдено")
+            except Exception as e:
+                logging.error(f"Ошибка при получении объявления {ad_id} для редактирования: {e}")
+                main_menu = create_main_menu()
+                await message.answer("❌ Ошибка.", reply_markup=main_menu)
+                await state.clear()
     else:
         await message.answer("Пожалуйста, выберите поле из списка.")
 
+# --- Ввод нового значения ---
 @dp.message(StateFilter(AdStates.my_ad_edit_value))
 async def my_ad_edit_value(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
@@ -582,11 +777,10 @@ async def my_ad_edit_value(message: Message, state: FSMContext):
 
     new_value = message.text
     data = await state.get_data()
-    selected_ad = data.get('selected_ad')
+    ad_id = data.get('current_ad_id')
     field_name = data.get('editing_field')
-    ad_id = selected_ad[0] if selected_ad else None
 
-    if not selected_ad or not field_name or not ad_id:
+    if not ad_id or not field_name:
         main_menu = create_main_menu()
         await message.answer("❌ Ошибка. Попробуйте снова.", reply_markup=main_menu)
         await state.clear()
@@ -594,7 +788,6 @@ async def my_ad_edit_value(message: Message, state: FSMContext):
 
     try:
         database.update_ad_field(ad_id, field_name, new_value)
-        # Обновляем главное меню после редактирования
         main_menu = create_main_menu()
         await message.answer(f"✅ Поле успешно обновлено!", reply_markup=main_menu)
         await state.clear()
@@ -621,7 +814,7 @@ async def admin_start(message: Message, command: CommandObject):
             await message.answer("❌ Объявление не найдено.")
         return
 
-    await message.answer("🔧 Админ-панель\nВведите /admin_list для просмотра всех объявлений\nВведите /broadcast <текст> для рассылки")
+    await message.answer("🔧 Админ-панель\nВведите /admin_list для просмотра всех объявлений\nВведите /broadcast <текст> для рассылки\nВведите /stats для статистики")
 
 @dp.message(Command("admin_list"))
 async def admin_list(message: Message):
@@ -702,7 +895,7 @@ async def broadcast_message(message: Message, command: CommandObject):
                 # Пауза, чтобы не превысить лимиты Telegram
                 # Согласно FAQ: ~30 сообщений в секунду бесплатно.
                 # Пауза 1/30 = 0.033 секунды. Сделаем немного больше для надежности.
-                await asyncio.sleep(0.05) 
+                await asyncio.sleep(0.05)
             except aiogram.exceptions.TelegramForbiddenError:
                 # Пользователь заблокировал бота
                 logging.info(f"Пользователь {user_id} заблокировал бота, пропускаем.")
@@ -723,11 +916,55 @@ async def broadcast_message(message: Message, command: CommandObject):
             except Exception as e:
                 logging.error(f"Ошибка при отправке сообщения пользователю {user_id}: {e}")
                 # Не прерываем рассылку из-за ошибки у одного пользователя
-        
+
         await message.answer(f"✅ Рассылка завершена!\nСообщение отправлено: {count}\nЗаблокировали бота: {count_blocked}")
     except Exception as e:
         logging.error(f"Ошибка в /broadcast: {e}")
         await message.answer("❌ Произошла ошибка при рассылке.")
+
+# --- Статистика для администратора ---
+@dp.message(Command("stats"))
+async def show_stats(message: Message):
+    """Показывает базовую статистику бота."""
+    if message.from_user.id != config.ADMIN_ID:
+        await message.answer("❌ Доступ запрещён!")
+        return
+
+    try:
+        # --- Сбор данных ---
+        total_ads = len(database.get_all_ads())
+        total_users = len(database.get_all_users())
+
+        # Количество объявлений по категориям
+        category_stats = {}
+        for cat in CATEGORIES_LIST:
+            try:
+                count = len(database.get_ads_by_category(cat))
+                category_stats[cat] = count
+            except Exception as e:
+                logging.error(f"Ошибка при подсчете статистики для категории '{cat}': {e}")
+                category_stats[cat] = 0
+
+        # Сортировка категорий по количеству
+        sorted_categories = sorted(category_stats.items(), key=lambda item: item[1], reverse=True)
+
+        # --- Формирование сообщения ---
+        stats_text = f"""
+📊 <b>Статистика бота</b>
+
+👥 <b>Пользователи:</b> {total_users}
+📢 <b>Объявления:</b> {total_ads}
+
+📂 <b>По категориям:</b>
+"""
+        for cat, count in sorted_categories:
+            stats_text += f"• {cat}: {count}\n"
+
+        await message.answer(stats_text, parse_mode='HTML')
+
+    except Exception as e:
+        logging.error(f"Ошибка в /stats: {e}")
+        await message.answer("❌ Произошла ошибка при получении статистики.")
 
 # --- Запуск ---
 async def main():
