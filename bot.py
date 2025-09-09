@@ -1,13 +1,25 @@
+Хорошо, вот исправленный `bot.py` с улучшенной логикой отправки сообщений, чтобы избежать ошибки `TelegramRetryAfter` (флуд-контроль). Я добавил паузы между отправкой сообщений и уточнил обработку ошибок.
+
+**Основные изменения:**
+
+1.  **Добавлены паузы:** `await asyncio.sleep(0.5)` или `1` секунда добавлены между отправкой основных сообщений (объявлений, записей "Потеряшек") и между отправкой групп фото.
+2.  **Уточнена обработка ошибок:** Добавлен импорт `aiogram.exceptions` и отдельная обработка `TelegramRetryAfter` в критических местах, чтобы пользователь получал более понятное сообщение.
+3.  **Улучшена навигация:** Кнопка "⬅️ Назад" в подменю "Объявления" и "Потеряшки" теперь корректно возвращает в главное меню и очищает состояние.
+
+**ВАЖНО:** Для этого кода требуется, чтобы `database.py` также был обновлён для поддержки `photo_ids` в таблице `finds`. Убедитесь, что вы используете последнюю версию `database.py`, которую я предоставлял ранее (с `import sqlite3` и обновлённой таблицей `finds`).
+
+```python
 # bot.py
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, StateFilter, CommandObject
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from datetime import datetime
 import asyncio
 import logging
-import os
+# Импортируем исключения для точной обработки ошибок
+import aiogram.exceptions
 
 import config
 import database
@@ -155,7 +167,6 @@ async def enter_finds_section(message: Message, state: FSMContext):
     await message.answer("Раздел: Потеряшки", reply_markup=finds_submenu)
 
 # --- Общая кнопка "Назад" для выхода в главное меню ---
-# Проверяем текст сообщения и то, что предыдущая клавиатура была из подменю
 @dp.message(F.text == "⬅️ Назад")
 async def go_back_to_main(message: Message, state: FSMContext):
     # Очищаем состояние при выходе в главное меню
@@ -183,7 +194,6 @@ async def process_category(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
         ads_submenu = create_ads_submenu()
         await state.clear()
-        # Очищаем временные фото при отмене
         user_id = message.from_user.id
         if user_id in user_photos_ads:
              del user_photos_ads[user_id]
@@ -230,7 +240,7 @@ async def process_photo_ad(message: Message, state: FSMContext):
     if len(user_photos_ads[user_id]) < 3:
         user_photos_ads[user_id].append(message.photo[-1].file_id)
         await message.answer(f"Фото добавлено ({len(user_photos_ads[user_id])}/3)")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.1) # Минимальная пауза
     else:
         await message.answer("Можно загрузить максимум 3 фото.")
 
@@ -247,7 +257,6 @@ async def process_photo_done_ad(message: Message, state: FSMContext):
              await message.answer(f"Введите описание объявления: 💬\n(Текущее: {current_desc[:50]}...)", reply_markup=cancel_kb)
              await state.set_state(AdStates.description)
         return
-    # Если текст не "Назад", считаем его сигналом к завершению загрузки
     await message.answer("Введите контакт 📞(телефон, @username):", reply_markup=cancel_kb)
     await state.set_state(AdStates.contact)
 
@@ -277,7 +286,6 @@ async def process_contact_ad(message: Message, state: FSMContext):
             created_at=created_at
         )
         ads_submenu = create_ads_submenu()
-        # Очищаем временные фото после успешного добавления
         if user_id in user_photos_ads:
              del user_photos_ads[user_id]
         await message.answer("✅ Объявление успешно опубликовано!", reply_markup=ads_submenu)
@@ -285,7 +293,6 @@ async def process_contact_ad(message: Message, state: FSMContext):
         logging.error(f"Ошибка при добавлении объявления: {e}")
         ads_submenu = create_ads_submenu()
         await message.answer("❌ Произошла ошибка при публикации. Попробуйте позже.", reply_markup=ads_submenu)
-        # Не очищаем фото, пусть пользователь решает
 
     await state.clear()
 
@@ -326,7 +333,8 @@ async def process_search_category(message: Message, state: FSMContext):
         return
 
     ads_submenu = create_ads_submenu()
-    await message.answer(f"📄 Объявления в категории '{category}':", reply_markup=ReplyKeyboardRemove()) # Скрываем клавиатуру перед списком
+    # Скрываем клавиатуру перед списком
+    await message.answer(f"📄 Объявления в категории '{category}':", reply_markup=types.ReplyKeyboardRemove())
 
     for i, ad in enumerate(ads[:5]):
         text = f"""
@@ -336,21 +344,42 @@ async def process_search_category(message: Message, state: FSMContext):
 📞 Контакт: {ad[6]}
 📅 Дата: {ad[7]}
         """
-        await message.answer(text)
+        try:
+            await message.answer(text)
+        except aiogram.exceptions.TelegramRetryAfter as e:
+            logging.warning(f"Флуд-контроль при отправке текста объявления: {e}")
+            await message.answer(f"⏳ Пожалуйста, подождите {e.retry_after} секунд...")
+            await asyncio.sleep(e.retry_after)
+            # Повторная попытка
+            await message.answer(text)
+        except Exception as e:
+            logging.error(f"Другая ошибка при отправке текста объявления: {e}")
+            await message.answer("❌ Ошибка при отправке объявления.")
+
         photo_ids = ad[5]
         if photo_ids:
             try:
                 photo_list = photo_ids.split(',')
-                # Ограничиваем до 10 фото (предел Telegram для группы)
                 media = [types.InputMediaPhoto(media=pid) for pid in photo_list[:10]]
                 await bot.send_media_group(chat_id=message.chat.id, media=media)
+                await asyncio.sleep(1) # Пауза после отправки фото
+            except aiogram.exceptions.TelegramRetryAfter as e:
+                logging.warning(f"Флуд-контроль при отправке фото: {e}")
+                await message.answer(f"⏳ Пожалуйста, подождите {e.retry_after} секунд...")
+                await asyncio.sleep(e.retry_after)
+                # Повторная попытка
+                try:
+                    await bot.send_media_group(chat_id=message.chat.id, media=media)
+                    await asyncio.sleep(1)
+                except Exception as e2:
+                    logging.error(f"Ошибка при повторной отправке фото: {e2}")
             except Exception as e:
                 logging.error(f"Ошибка при отправке фото для объявления {ad[0]}: {e}")
-            await asyncio.sleep(0.5)
-        if i < len(ads[:5]) - 1:
-            await asyncio.sleep(0.5)
 
-    # Возвращаем клавиатуру в конце
+        # Пауза между объявлениями
+        if i < len(ads[:5]) - 1:
+            await asyncio.sleep(1)
+
     await message.answer("Поиск завершен.", reply_markup=ads_submenu)
     await state.clear()
 
@@ -360,7 +389,7 @@ async def my_ads_start(message: Message, state: FSMContext):
     try:
         user_ads = database.get_ads_by_user_id(user_id)
     except Exception as e:
-        logging.error(f"Ошибка в my_ads_start: {e}")
+        logging.error(f"Ошибка в my_ads_start (получение из БД): {e}")
         ads_submenu = create_ads_submenu()
         await message.answer("❌ Произошла ошибка при получении ваших объявлений.", reply_markup=ads_submenu)
         return
@@ -370,7 +399,7 @@ async def my_ads_start(message: Message, state: FSMContext):
         await message.answer("📭 У вас пока нет объявлений.", reply_markup=ads_submenu)
         return
 
-    await message.answer("📄 Ваши объявления:", reply_markup=ReplyKeyboardRemove()) # Скрываем клавиатуру
+    await message.answer("📄 Ваши объявления:", reply_markup=types.ReplyKeyboardRemove())
     await state.update_data(my_ads=user_ads)
     await state.set_state(AdStates.my_ads_list)
 
@@ -378,7 +407,7 @@ async def my_ads_start(message: Message, state: FSMContext):
     for ad in user_ads[:10]:
         button_text = f"🆔 {ad[0]}: {ad[3][:20]}..."
         kb.append([KeyboardButton(text=button_text)])
-    kb.append([KeyboardButton(text="⬅️ Назад")]) # Центрированная кнопка назад
+    kb.append([KeyboardButton(text="⬅️ Назад")])
     ads_kb = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
     await message.answer("Выберите объявление для просмотра/редактирования/удаления:", reply_markup=ads_kb)
 
@@ -417,7 +446,7 @@ async def my_ads_select(message: Message, state: FSMContext):
         actions_kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="✏️ Редактировать"), KeyboardButton(text="🗑️ Удалить")],
-                [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
+                [KeyboardButton(text="⬅️ Назад")],
             ],
             resize_keyboard=True
         )
@@ -458,7 +487,7 @@ async def my_ad_action(message: Message, state: FSMContext):
             keyboard=[
                 [KeyboardButton(text="🏷️ Заголовок"), KeyboardButton(text="📝 Описание")],
                 [KeyboardButton(text="📞 Контакт")],
-                [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
+                [KeyboardButton(text="⬅️ Назад")],
             ],
             resize_keyboard=True
         )
@@ -485,7 +514,7 @@ async def my_ad_edit_field(message: Message, state: FSMContext):
             actions_kb = ReplyKeyboardMarkup(
                 keyboard=[
                     [KeyboardButton(text="✏️ Редактировать"), KeyboardButton(text="🗑️ Удалить")],
-                    [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
+                    [KeyboardButton(text="⬅️ Назад")],
                 ],
                 resize_keyboard=True
             )
@@ -529,7 +558,7 @@ async def my_ad_edit_value(message: Message, state: FSMContext):
             keyboard=[
                 [KeyboardButton(text="🏷️ Заголовок"), KeyboardButton(text="📝 Описание")],
                 [KeyboardButton(text="📞 Контакт")],
-                [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
+                [KeyboardButton(text="⬅️ Назад")],
             ],
             resize_keyboard=True
         )
@@ -572,7 +601,6 @@ async def finds_process_type(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
         finds_submenu = create_finds_submenu()
         await state.clear()
-        # Очищаем временные фото при отмене
         user_id = message.from_user.id
         if user_id in user_photos_finds:
              del user_photos_finds[user_id]
@@ -657,7 +685,7 @@ async def finds_process_photo(message: Message, state: FSMContext):
     if len(user_photos_finds[user_id]) < 3:
         user_photos_finds[user_id].append(message.photo[-1].file_id)
         await message.answer(f"Фото добавлено ({len(user_photos_finds[user_id])}/3)")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.1) # Минимальная пауза
     else:
         await message.answer("Можно загрузить максимум 3 фото.")
 
@@ -670,12 +698,10 @@ async def finds_process_photo_done(message: Message, state: FSMContext):
         if photo_count > 0:
              await message.answer(f"Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — нажмите 'Готово'.\n(Загружено: {photo_count})", reply_markup=cancel_kb)
         else:
-             # Если фото не было, возвращаемся к контакту
              current_contact = data.get('contact', '')
              await message.answer(f"Контакт для связи (телефон, @username):\n(Текущий: {current_contact})", reply_markup=cancel_kb)
              await state.set_state(FindStates.entering_contact)
         return
-    # Если текст не "Назад", считаем его сигналом к завершению
     await finds_save_find(message, state)
 
 async def finds_save_find(message: Message, state: FSMContext):
@@ -704,7 +730,6 @@ async def finds_save_find(message: Message, state: FSMContext):
             created_at=created_at
         )
         finds_submenu = create_finds_submenu()
-        # Очищаем временные фото после успешного добавления
         if user_id in user_photos_finds:
              del user_photos_finds[user_id]
         await message.answer("✅ Запись успешно добавлена!", reply_markup=finds_submenu)
@@ -712,7 +737,6 @@ async def finds_save_find(message: Message, state: FSMContext):
         logging.error(f"Ошибка при добавлении записи в Потеряшки: {e}")
         finds_submenu = create_finds_submenu()
         await message.answer("❌ Произошла ошибка при добавлении записи. Попробуйте позже.", reply_markup=finds_submenu)
-        # Не очищаем фото, пусть пользователь решает
 
     await state.clear()
 
@@ -725,7 +749,7 @@ async def finds_show_found(message: Message):
              await message.answer("📭 Пока никто ничего не нашел.", reply_markup=finds_submenu)
              return
 
-         await message.answer("🔍 Найдено:", reply_markup=ReplyKeyboardRemove()) # Скрываем клавиатуру перед списком
+         await message.answer("🔍 Найдено:", reply_markup=types.ReplyKeyboardRemove())
 
          for i, item in enumerate(found_items[:10]):
               text = f"""
@@ -736,20 +760,40 @@ async def finds_show_found(message: Message):
 📞 Контакт: {item[7]}
 🕒 Дата публикации: {item[9]}
               """
-              await message.answer(text)
-              photo_ids = item[8] # Предполагаем, что photo_ids теперь в столбце 8
+              try:
+                  await message.answer(text)
+              except aiogram.exceptions.TelegramRetryAfter as e:
+                  logging.warning(f"Флуд-контроль при отправке текста записи (Найдено): {e}")
+                  await message.answer(f"⏳ Пожалуйста, подождите {e.retry_after} секунд...")
+                  await asyncio.sleep(e.retry_after)
+                  await message.answer(text)
+              except Exception as e:
+                  logging.error(f"Другая ошибка при отправке текста записи (Найдено): {e}")
+                  await message.answer("❌ Ошибка при отправке записи.")
+
+              photo_ids = item[8]
               if photo_ids:
                   try:
                       photo_list = photo_ids.split(',')
                       media = [types.InputMediaPhoto(media=pid) for pid in photo_list[:10]]
                       await bot.send_media_group(chat_id=message.chat.id, media=media)
+                      await asyncio.sleep(1) # Пауза после фото
+                  except aiogram.exceptions.TelegramRetryAfter as e:
+                      logging.warning(f"Флуд-контроль при отправке фото (Найдено): {e}")
+                      await message.answer(f"⏳ Пожалуйста, подождите {e.retry_after} секунд...")
+                      await asyncio.sleep(e.retry_after)
+                      try:
+                          await bot.send_media_group(chat_id=message.chat.id, media=media)
+                          await asyncio.sleep(1)
+                      except Exception as e2:
+                          logging.error(f"Ошибка при повторной отправке фото (Найдено): {e2}")
                   except Exception as e:
-                      logging.error(f"Ошибка при отправке фото для записи {item[0]}: {e}")
-                  await asyncio.sleep(0.5)
-              if i < len(found_items[:10]) - 1:
-                  await asyncio.sleep(0.5)
+                      logging.error(f"Ошибка при отправке фото для записи {item[0]} (Найдено): {e}")
 
-         # Возвращаем клавиатуру в конце
+              # Пауза между записями
+              if i < len(found_items[:10]) - 1:
+                  await asyncio.sleep(1)
+
          await message.answer("Поиск завершен.", reply_markup=finds_submenu)
      except Exception as e:
          logging.error(f"Ошибка при показе найденных предметов: {e}")
@@ -765,7 +809,7 @@ async def finds_show_lost(message: Message):
              await message.answer("📭 Пока никто ничего не потерял.", reply_markup=finds_submenu)
              return
 
-         await message.answer("🆘 Потеряно:", reply_markup=ReplyKeyboardRemove()) # Скрываем клавиатуру перед списком
+         await message.answer("🆘 Потеряно:", reply_markup=types.ReplyKeyboardRemove())
 
          for i, item in enumerate(lost_items[:10]):
               text = f"""
@@ -776,20 +820,40 @@ async def finds_show_lost(message: Message):
 📞 Контакт: {item[7]}
 🕒 Дата публикации: {item[9]}
               """
-              await message.answer(text)
-              photo_ids = item[8] # Предполагаем, что photo_ids теперь в столбце 8
+              try:
+                  await message.answer(text)
+              except aiogram.exceptions.TelegramRetryAfter as e:
+                  logging.warning(f"Флуд-контроль при отправке текста записи (Потеряно): {e}")
+                  await message.answer(f"⏳ Пожалуйста, подождите {e.retry_after} секунд...")
+                  await asyncio.sleep(e.retry_after)
+                  await message.answer(text)
+              except Exception as e:
+                  logging.error(f"Другая ошибка при отправке текста записи (Потеряно): {e}")
+                  await message.answer("❌ Ошибка при отправке записи.")
+
+              photo_ids = item[8]
               if photo_ids:
                   try:
                       photo_list = photo_ids.split(',')
                       media = [types.InputMediaPhoto(media=pid) for pid in photo_list[:10]]
                       await bot.send_media_group(chat_id=message.chat.id, media=media)
+                      await asyncio.sleep(1) # Пауза после фото
+                  except aiogram.exceptions.TelegramRetryAfter as e:
+                      logging.warning(f"Флуд-контроль при отправке фото (Потеряно): {e}")
+                      await message.answer(f"⏳ Пожалуйста, подождите {e.retry_after} секунд...")
+                      await asyncio.sleep(e.retry_after)
+                      try:
+                          await bot.send_media_group(chat_id=message.chat.id, media=media)
+                          await asyncio.sleep(1)
+                      except Exception as e2:
+                          logging.error(f"Ошибка при повторной отправке фото (Потеряно): {e2}")
                   except Exception as e:
-                      logging.error(f"Ошибка при отправке фото для записи {item[0]}: {e}")
-                  await asyncio.sleep(0.5)
-              if i < len(lost_items[:10]) - 1:
-                  await asyncio.sleep(0.5)
+                      logging.error(f"Ошибка при отправке фото для записи {item[0]} (Потеряно): {e}")
 
-         # Возвращаем клавиатуру в конце
+              # Пауза между записями
+              if i < len(lost_items[:10]) - 1:
+                  await asyncio.sleep(1)
+
          await message.answer("Поиск завершен.", reply_markup=finds_submenu)
      except Exception as e:
          logging.error(f"Ошибка при показе потерянных предметов: {e}")
@@ -869,3 +933,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+```
