@@ -7,6 +7,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKey
 from datetime import datetime
 import asyncio
 import logging
+import os
 
 import config
 import database
@@ -17,115 +18,90 @@ logging.basicConfig(level=logging.INFO)
 # Инициализация
 database.init_db()
 
-# Храним фото временно (для объявлений)
-user_photos = {}
+# Храним фото временно
+user_photos_ads = {}      # Для объявлений
+user_photos_finds = {}    # Для потеряшек
 
-# --- Клавиатуры ---
-# Список категорий для объявлений
-categories_list = [
+# --- Константы ---
+CATEGORIES_LIST = [
     "🏠 Недвижимость", "🚗 Транспорт",
     "💼 Работа/Услуги", "🛒 Вещи",
     "🐶 Отдам даром", "🎓 Обучение"
 ]
 
 # --- Функции для создания клавиатур ---
-# Главное меню (разделы)
 def create_main_sections_menu():
+    """Создает главное меню с разделами."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📢 Объявления")],
             [KeyboardButton(text="🔍 Потеряшки")],
-            # [KeyboardButton(text="🎭 Афиша")] # Можно добавить позже
         ],
         resize_keyboard=True
     )
 
-# Подменю "Объявления"
 def create_ads_submenu():
+    """Создает подменю для раздела Объявления."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Подать объявление")],
-            [KeyboardButton(text="🔍 Поиск по категориям")],
+            [KeyboardButton(text="➕ Подать объявление"), KeyboardButton(text="🔍 Поиск по категориям")],
             [KeyboardButton(text="👤 Мои объявления")],
-            [KeyboardButton(text="⬅️ Назад")]
+            [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
         ],
         resize_keyboard=True
     )
 
-# Подменю "Потеряшки"
 def create_finds_submenu():
+    """Создает подменю для раздела Потеряшки."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Сообщить")], # Ведет к выбору "Найдено"/"Потеряно"
-            [KeyboardButton(text="👀 Найдено")],   # Просмотр находок
-            [KeyboardButton(text="🆘 Потеряно")], # Просмотр потерь
-            [KeyboardButton(text="📝 Мои записи")], # Просмотр своих
-            [KeyboardButton(text="⬅️ Назад")]
+            [KeyboardButton(text="➕ Сообщить"), KeyboardButton(text="👀 Найдено")],
+            [KeyboardButton(text="🆘 Потеряно"), KeyboardButton(text="📝 Мои записи")],
+            [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
         ],
         resize_keyboard=True
     )
 
-# Клавиатура выбора типа записи в "Потеряшках"
 def create_find_type_kb():
+    """Клавиатура выбора типа записи в Потеряшках."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🎁 Нашел")],
-            [KeyboardButton(text="😢 Потерял")],
-            [KeyboardButton(text="⬅️ Назад")]
+            [KeyboardButton(text="🎁 Нашел"), KeyboardButton(text="😢 Потерял")],
+            [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
         ],
         resize_keyboard=True
     )
 
-# Создание клавиатуры категорий в 2 столбца БЕЗ количества объявлений (для добавления)
 def create_simple_categories_keyboard():
-    categories_kb_rows = []
-    for i in range(0, len(categories_list), 2):
-        row = [KeyboardButton(text=cat) for cat in categories_list[i:i+2]]
-        categories_kb_rows.append(row)
-    categories_kb_rows.append([KeyboardButton(text="⬅️ Назад")])
-    return ReplyKeyboardMarkup(keyboard=categories_kb_rows, resize_keyboard=True)
+    """Клавиатура категорий для добавления объявления (2 колонки)."""
+    kb_rows = []
+    for i in range(0, len(CATEGORIES_LIST), 2):
+        row = [KeyboardButton(text=cat) for cat in CATEGORIES_LIST[i:i+2]]
+        kb_rows.append(row)
+    kb_rows.append([KeyboardButton(text="⬅️ Назад")]) # Центрированная кнопка назад
+    return ReplyKeyboardMarkup(keyboard=kb_rows, resize_keyboard=True)
 
-# Создание клавиатуры категорий в 2 столбца С количеством объявлений (для поиска)
 def create_search_categories_keyboard():
-    categories_kb_rows = []
-    for i in range(0, len(categories_list), 2):
+    """Клавиатура категорий для поиска объявлений (2 колонки с количеством)."""
+    kb_rows = []
+    for i in range(0, len(CATEGORIES_LIST), 2):
         row_buttons = []
-        for cat in categories_list[i:i+2]:
-            # Получаем количество объявлений в этой категории
+        for cat in CATEGORIES_LIST[i:i+2]:
             try:
                 count = len(database.get_ads_by_category(cat))
             except Exception as e:
-                logging.error(f"Ошибка при получении количества объявлений для категории '{cat}': {e}")
+                logging.error(f"Ошибка при подсчете объявлений для категории '{cat}': {e}")
                 count = 0
             row_buttons.append(KeyboardButton(text=f"{cat} ({count})"))
-        categories_kb_rows.append(row_buttons)
-    categories_kb_rows.append([KeyboardButton(text="⬅️ Назад")])
-    return ReplyKeyboardMarkup(keyboard=categories_kb_rows, resize_keyboard=True)
+        kb_rows.append(row_buttons)
+    kb_rows.append([KeyboardButton(text="⬅️ Назад")]) # Центрированная кнопка назад
+    return ReplyKeyboardMarkup(keyboard=kb_rows, resize_keyboard=True)
 
 # Клавиатура "Отмена/Назад" для скрытия меню во время ввода данных
 cancel_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="⬅️ Назад")]],
+    keyboard=[[KeyboardButton(text="⬅️ Назад")]], # Центрированная кнопка назад
     resize_keyboard=True
 )
-
-# Главное меню (счетчик обновляется при необходимости)
-def create_main_menu():
-    # Получаем общее количество объявлений
-    try:
-        total_ads_count = len(database.get_all_ads())
-    except Exception as e:
-        logging.error(f"Ошибка при получении общего количества объявлений: {e}")
-        total_ads_count = 0
-
-    main_menu = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=f"➕ Подать объявление")],
-            [KeyboardButton(text=f"🔍 Все объявления ({total_ads_count})")],
-            [KeyboardButton(text="👤 Мои объявления")]
-        ],
-        resize_keyboard=True
-    )
-    return main_menu
 
 # --- Состояния ---
 class AdStates(StatesGroup):
@@ -135,37 +111,23 @@ class AdStates(StatesGroup):
     photo = State()
     contact = State()
     search_category = State()
-    admin_menu = State()
-    admin_delete = State()
-    # Новые состояния для "Мои объявления"
     my_ads_list = State()
     my_ad_selected = State()
-    my_ad_edit_field = State() # Для выбора поля редактирования
-    my_ad_edit_value = State() # Для ввода нового значения
+    my_ad_edit_field = State()
+    my_ad_edit_value = State()
 
-# --- Состояния для раздела "Потеряшки" ---
 class FindStates(StatesGroup):
-    # Выбор типа записи (найдено/потеряно) при добавлении
     choosing_type = State()
-    # Ввод описания предмета
     entering_item = State()
-    # Ввод описания деталей
     entering_description = State()
-    # Ввод места
     entering_location = State()
-    # Ввод даты
     entering_date = State()
-    # Ввод контакта
     entering_contact = State()
-    # Просмотр списка своих записей
+    uploading_photos = State() # Новое состояние для фото
     viewing_my_finds = State()
-    # Выбор конкретной записи для действий
     viewing_selected_find = State()
-    # Выбор действия (редактировать/удалить)
     choosing_action = State()
-    # Выбор поля для редактирования
     choosing_edit_field = State()
-    # Ввод нового значения при редактировании
     entering_edit_value = State()
 
 # --- Инициализация бота ---
@@ -175,47 +137,43 @@ dp = Dispatcher()
 # --- Обработчики ---
 @dp.message(Command("start"))
 async def start(message: Message):
-    # Очищаем состояние при входе в главное меню
-    # await state.clear() # Не передается state в handler для Command
-    main_sections_menu = create_main_sections_menu()
+    main_menu = create_main_sections_menu()
     await message.answer(
         "Добро пожаловать! Выберите раздел:",
-        reply_markup=main_sections_menu
+        reply_markup=main_menu
     )
 
 # --- Навигация и главное меню ---
-# --- Переход в раздел "Объявления" ---
 @dp.message(F.text == "📢 Объявления")
 async def enter_ads_section(message: Message, state: FSMContext):
     ads_submenu = create_ads_submenu()
     await message.answer("Раздел: Объявления", reply_markup=ads_submenu)
 
-# --- Переход в раздел "Потеряшки" ---
 @dp.message(F.text == "🔍 Потеряшки")
 async def enter_finds_section(message: Message, state: FSMContext):
     finds_submenu = create_finds_submenu()
     await message.answer("Раздел: Потеряшки", reply_markup=finds_submenu)
 
-# --- Кнопка "Назад" в главных разделах ---
-# Для выхода из подменю "Объявления"
-@dp.message(F.text == "⬅️ Назад", lambda msg: msg.reply_markup and any("Подать объявление" in row[0].text for row in msg.reply_markup.keyboard))
-async def back_from_ads(message: Message, state: FSMContext):
-    main_sections_menu = create_main_sections_menu()
-    await state.clear() # Очищаем состояние, если нужно
-    await message.answer("Главное меню", reply_markup=main_sections_menu)
+# --- Общая кнопка "Назад" для выхода в главное меню ---
+# Проверяем текст сообщения и то, что предыдущая клавиатура была из подменю
+@dp.message(F.text == "⬅️ Назад")
+async def go_back_to_main(message: Message, state: FSMContext):
+    # Очищаем состояние при выходе в главное меню
+    await state.clear()
+    # Удаляем временные данные пользователя, если есть
+    user_id = message.from_user.id
+    if user_id in user_photos_ads:
+        del user_photos_ads[user_id]
+    if user_id in user_photos_finds:
+        del user_photos_finds[user_id]
 
-# Для выхода из подменю "Потеряшки"
-@dp.message(F.text == "⬅️ Назад", lambda msg: msg.reply_markup and any("Сообщить" in row[0].text for row in msg.reply_markup.keyboard))
-async def back_from_finds(message: Message, state: FSMContext):
-    main_sections_menu = create_main_sections_menu()
-    await state.clear() # Очищаем состояние, если нужно
-    await message.answer("Главное меню", reply_markup=main_sections_menu)
+    main_menu = create_main_sections_menu()
+    await message.answer("Главное меню", reply_markup=main_menu)
+
 
 # --- Раздел "Объявления" ---
-# --- Подача объявления ---
 @dp.message(F.text == "➕ Подать объявление")
 async def new_ad_start(message: Message, state: FSMContext):
-    # Используем УПРОЩЕННУЮ клавиатуру без количества
     simple_kb = create_simple_categories_keyboard()
     await message.answer("Выберите категорию:", reply_markup=simple_kb)
     await state.set_state(AdStates.category)
@@ -223,30 +181,29 @@ async def new_ad_start(message: Message, state: FSMContext):
 @dp.message(StateFilter(AdStates.category))
 async def process_category(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Обновляем главное меню перед возвратом
         ads_submenu = create_ads_submenu()
         await state.clear()
+        # Очищаем временные фото при отмене
+        user_id = message.from_user.id
+        if user_id in user_photos_ads:
+             del user_photos_ads[user_id]
         await message.answer("Раздел: Объявления", reply_markup=ads_submenu)
         return
 
-    # Проверяем по оригинальному списку, так как в кнопках нет количества
-    if message.text not in categories_list:
+    if message.text not in CATEGORIES_LIST:
         simple_kb = create_simple_categories_keyboard()
         await message.answer("Пожалуйста, выберите категорию из списка 👇.", reply_markup=simple_kb)
         return
 
     await state.update_data(category=message.text)
-    # Скрываем клавиатуру категорий, показываем клавиатуру "Отмена"
     await message.answer("Введите заголовок объявления: ✅", reply_markup=cancel_kb)
     await state.set_state(AdStates.title)
 
 @dp.message(StateFilter(AdStates.title))
 async def process_title(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-         # Возвращаемся к выбору категории
-         await new_ad_start(message, state) # Повторно вызываем, чтобы показать клавиатуру категорий
+         await new_ad_start(message, state)
          return
-
     await state.update_data(title=message.text)
     await message.answer("Введите описание объявления: 💬", reply_markup=cancel_kb)
     await state.set_state(AdStates.description)
@@ -254,65 +211,59 @@ async def process_title(message: Message, state: FSMContext):
 @dp.message(StateFilter(AdStates.description))
 async def process_description(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Возвращаемся к вводу заголовка
         data = await state.get_data()
         current_title = data.get('title', '')
         await message.answer(f"Введите заголовок объявления: ✅\n(Текущий: {current_title})", reply_markup=cancel_kb)
         await state.set_state(AdStates.title)
         return
-
     await state.update_data(description=message.text)
-    user_photos[message.from_user.id] = []
-    await message.answer("Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — отправьте любой текст.", reply_markup=cancel_kb)
+    user_id = message.from_user.id
+    user_photos_ads[user_id] = []
+    await message.answer("Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — нажмите 'Готово'.", reply_markup=cancel_kb)
     await state.set_state(AdStates.photo)
 
 @dp.message(StateFilter(AdStates.photo), F.photo)
-async def process_photo(message: Message, state: FSMContext):
-    # if message.text == "⬅️ Назад": # Этот if не нужен здесь, так как это обработчик фото
-    #     ...
-    #     return
-
+async def process_photo_ad(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    if len(user_photos[user_id]) < 3:
-        user_photos[user_id].append(message.photo[-1].file_id)
-        await message.answer(f"Фото добавлено ({len(user_photos[user_id])}/3)")
-        await asyncio.sleep(0.1) # Небольшая пауза
+    if user_id not in user_photos_ads:
+        user_photos_ads[user_id] = []
+    if len(user_photos_ads[user_id]) < 3:
+        user_photos_ads[user_id].append(message.photo[-1].file_id)
+        await message.answer(f"Фото добавлено ({len(user_photos_ads[user_id])}/3)")
+        await asyncio.sleep(0.1)
     else:
         await message.answer("Можно загрузить максимум 3 фото.")
 
 @dp.message(StateFilter(AdStates.photo))
-async def process_photo_done(message: Message, state: FSMContext):
+async def process_photo_done_ad(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Возвращаемся к загрузке фото (или к описанию, если фото уже есть)
         data = await state.get_data()
         user_id = message.from_user.id
-        photo_count = len(user_photos.get(user_id, []))
+        photo_count = len(user_photos_ads.get(user_id, []))
         if photo_count > 0:
-             await message.answer(f"Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — отправьте любой текст.\n(Загружено: {photo_count})", reply_markup=cancel_kb)
+             await message.answer(f"Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — нажмите 'Готово'.\n(Загружено: {photo_count})", reply_markup=cancel_kb)
         else:
-             # Если фото не было, возвращаемся к описанию
              current_desc = data.get('description', '')
              await message.answer(f"Введите описание объявления: 💬\n(Текущее: {current_desc[:50]}...)", reply_markup=cancel_kb)
              await state.set_state(AdStates.description)
         return
-
+    # Если текст не "Назад", считаем его сигналом к завершению загрузки
     await message.answer("Введите контакт 📞(телефон, @username):", reply_markup=cancel_kb)
     await state.set_state(AdStates.contact)
 
 @dp.message(StateFilter(AdStates.contact))
-async def process_contact(message: Message, state: FSMContext):
+async def process_contact_ad(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Возвращаемся к загрузке фото/завершению
         data = await state.get_data()
         user_id = message.from_user.id
-        photo_count = len(user_photos.get(user_id, []))
-        await message.answer(f"Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — отправьте любой текст.\n(Загружено: {photo_count})", reply_markup=cancel_kb)
+        photo_count = len(user_photos_ads.get(user_id, []))
+        await message.answer(f"Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — нажмите 'Готово'.\n(Загружено: {photo_count})", reply_markup=cancel_kb)
         await state.set_state(AdStates.photo)
         return
 
     data = await state.get_data()
     user_id = message.from_user.id
-    photo_ids = user_photos.get(user_id, [])
+    photo_ids = user_photos_ads.get(user_id, [])
     created_at = datetime.now().strftime("%d.%m.%Y %H:%M")
 
     try:
@@ -325,24 +276,21 @@ async def process_contact(message: Message, state: FSMContext):
             contact=message.text,
             created_at=created_at
         )
-        # Обновляем главное меню после добавления
-        # global main_menu # Не используем global для reply_markup
-        # main_menu = create_main_menu() # Не нужно обновлять тут, так как это другое меню
-        ads_submenu = create_ads_submenu() # Возвращаем в подменю объявлений
+        ads_submenu = create_ads_submenu()
+        # Очищаем временные фото после успешного добавления
+        if user_id in user_photos_ads:
+             del user_photos_ads[user_id]
         await message.answer("✅ Объявление успешно опубликовано!", reply_markup=ads_submenu)
     except Exception as e:
         logging.error(f"Ошибка при добавлении объявления: {e}")
         ads_submenu = create_ads_submenu()
         await message.answer("❌ Произошла ошибка при публикации. Попробуйте позже.", reply_markup=ads_submenu)
+        # Не очищаем фото, пусть пользователь решает
 
     await state.clear()
-    if user_id in user_photos:
-        del user_photos[user_id]
 
-# --- Поиск по категориям ---
 @dp.message(F.text == "🔍 Поиск по категориям")
 async def search_by_category_start(message: Message, state: FSMContext):
-    # Используем клавиатуру С количеством для поиска
     search_kb = create_search_categories_keyboard()
     await message.answer("Выберите категорию:", reply_markup=search_kb)
     await state.set_state(AdStates.search_category)
@@ -350,22 +298,18 @@ async def search_by_category_start(message: Message, state: FSMContext):
 @dp.message(StateFilter(AdStates.search_category))
 async def process_search_category(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Обновляем подменю объявлений перед возвратом
         ads_submenu = create_ads_submenu()
         await state.clear()
         await message.answer("Раздел: Объявления", reply_markup=ads_submenu)
         return
 
-    # Извлекаем название категории без количества "(...)"
     selected_category_text = message.text.split(" (")[0]
-    # Проверяем, что выбрана категория из списка
-    if selected_category_text not in categories_list:
+    if selected_category_text not in CATEGORIES_LIST:
         search_kb = create_search_categories_keyboard()
         await message.answer("Пожалуйста, выберите категорию из списка.", reply_markup=search_kb)
         return
 
     category = selected_category_text
-
     try:
         ads = database.get_ads_by_category(category)
     except Exception as e:
@@ -376,20 +320,18 @@ async def process_search_category(message: Message, state: FSMContext):
         return
 
     if not ads:
-        # Используем подменю объявлений для возврата
         ads_submenu = create_ads_submenu()
         await message.answer(f"📭 Пока нет объявлений в категории '{category}'.", reply_markup=ads_submenu)
         await state.clear()
         return
 
-    # Отправляем сообщение, что начинаем показ, и показываем подменю
     ads_submenu = create_ads_submenu()
-    await message.answer(f"📄 Объявления в категории '{category}':", reply_markup=ads_submenu)
+    await message.answer(f"📄 Объявления в категории '{category}':", reply_markup=ReplyKeyboardRemove()) # Скрываем клавиатуру перед списком
 
     for i, ad in enumerate(ads[:5]):
         text = f"""
-📌 {ad[3]}  # Заголовок
-💬 {ad[4]}      # Описание
+📌 {ad[3]}
+💬 {ad[4]}
 
 📞 Контакт: {ad[6]}
 📅 Дата: {ad[7]}
@@ -399,18 +341,19 @@ async def process_search_category(message: Message, state: FSMContext):
         if photo_ids:
             try:
                 photo_list = photo_ids.split(',')
-                media = [types.InputMediaPhoto(media=pid) for pid in photo_list[:10]] # Ограничение Telegram
+                # Ограничиваем до 10 фото (предел Telegram для группы)
+                media = [types.InputMediaPhoto(media=pid) for pid in photo_list[:10]]
                 await bot.send_media_group(chat_id=message.chat.id, media=media)
             except Exception as e:
                 logging.error(f"Ошибка при отправке фото для объявления {ad[0]}: {e}")
-            await asyncio.sleep(0.5) # Пауза между фото
-
+            await asyncio.sleep(0.5)
         if i < len(ads[:5]) - 1:
-            await asyncio.sleep(0.5) # Пауза между объявлениями
+            await asyncio.sleep(0.5)
 
-    await state.clear() # Очищаем состояние после показа
+    # Возвращаем клавиатуру в конце
+    await message.answer("Поиск завершен.", reply_markup=ads_submenu)
+    await state.clear()
 
-# --- Мои объявления ---
 @dp.message(F.text == "👤 Мои объявления")
 async def my_ads_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -427,34 +370,27 @@ async def my_ads_start(message: Message, state: FSMContext):
         await message.answer("📭 У вас пока нет объявлений.", reply_markup=ads_submenu)
         return
 
-    await message.answer("📄 Ваши объявления:")
-    # Сохраняем список объявлений пользователя в состоянии
+    await message.answer("📄 Ваши объявления:", reply_markup=ReplyKeyboardRemove()) # Скрываем клавиатуру
     await state.update_data(my_ads=user_ads)
     await state.set_state(AdStates.my_ads_list)
 
-    # Создаем клавиатуру с кнопками для каждого объявления
     kb = []
-    for ad in user_ads[:10]: # Показываем первые 10
-        button_text = f"🆔 {ad[0]}: {ad[3][:20]}..." # ID + заголовок
+    for ad in user_ads[:10]:
+        button_text = f"🆔 {ad[0]}: {ad[3][:20]}..."
         kb.append([KeyboardButton(text=button_text)])
-    kb.append([KeyboardButton(text="⬅️ Назад")])
+    kb.append([KeyboardButton(text="⬅️ Назад")]) # Центрированная кнопка назад
     ads_kb = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
     await message.answer("Выберите объявление для просмотра/редактирования/удаления:", reply_markup=ads_kb)
 
-# Выбор конкретного объявления из списка "Мои объявления"
 @dp.message(StateFilter(AdStates.my_ads_list))
 async def my_ads_select(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Обновляем подменю объявлений перед возвратом
         ads_submenu = create_ads_submenu()
         await state.clear()
         await message.answer("Раздел: Объявления", reply_markup=ads_submenu)
         return
 
-    # Извлекаем ID из текста кнопки "🆔 123: Заголовок..."
     try:
-        # Разбиваем по ":" и берем последний элемент первой части
         ad_id_str = message.text.split(":")[0].split()[-1]
         ad_id = int(ad_id_str)
         data = await state.get_data()
@@ -465,11 +401,9 @@ async def my_ads_select(message: Message, state: FSMContext):
             await message.answer("❌ Объявление не найдено. Пожалуйста, выберите из списка.")
             return
 
-        # Сохраняем выбранное объявление
         await state.update_data(selected_ad=selected_ad)
         await state.set_state(AdStates.my_ad_selected)
 
-        # Отправляем информацию об объявлении
         text = f"""
 🆔 ID: {selected_ad[0]}
 📌 Категория: {selected_ad[2]}
@@ -480,12 +414,10 @@ async def my_ads_select(message: Message, state: FSMContext):
         """
         await message.answer(text)
 
-        # Клавиатура с действиями
         actions_kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="✏️ Редактировать")],
-                [KeyboardButton(text="🗑️ Удалить")],
-                [KeyboardButton(text="⬅️ Назад")]
+                [KeyboardButton(text="✏️ Редактировать"), KeyboardButton(text="🗑️ Удалить")],
+                [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
             ],
             resize_keyboard=True
         )
@@ -495,12 +427,10 @@ async def my_ads_select(message: Message, state: FSMContext):
         logging.error(f"Ошибка в my_ads_select: {e}")
         await message.answer("❌ Неверный формат. Пожалуйста, выберите объявление из списка.")
 
-# --- Действия с выбранным объявлением ---
 @dp.message(StateFilter(AdStates.my_ad_selected))
 async def my_ad_action(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Возвращаемся к списку объявлений
-        await my_ads_start(message, state) # Повторно вызываем, чтобы обновить список
+        await my_ads_start(message, state)
         return
 
     if message.text == "🗑️ Удалить":
@@ -510,9 +440,6 @@ async def my_ad_action(message: Message, state: FSMContext):
             ad_id = selected_ad[0]
             try:
                 database.delete_ad(ad_id)
-                # Обновляем главное меню после удаления (не нужно, возвращаем в подменю)
-                # global main_menu
-                # main_menu = create_main_menu()
                 ads_submenu = create_ads_submenu()
                 await message.answer(f"✅ Объявление #{ad_id} удалено!", reply_markup=ads_submenu)
             except Exception as e:
@@ -529,10 +456,9 @@ async def my_ad_action(message: Message, state: FSMContext):
         await state.set_state(AdStates.my_ad_edit_field)
         edit_kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="🏷️ Заголовок")],
-                [KeyboardButton(text="📝 Описание")],
+                [KeyboardButton(text="🏷️ Заголовок"), KeyboardButton(text="📝 Описание")],
                 [KeyboardButton(text="📞 Контакт")],
-                [KeyboardButton(text="⬅️ Назад")]
+                [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
             ],
             resize_keyboard=True
         )
@@ -541,15 +467,12 @@ async def my_ad_action(message: Message, state: FSMContext):
 
     await message.answer("Пожалуйста, выберите действие.")
 
-# --- Выбор поля для редактирования ---
 @dp.message(StateFilter(AdStates.my_ad_edit_field))
 async def my_ad_edit_field(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Возвращаемся к выбранному объявлению
         data = await state.get_data()
         selected_ad = data.get('selected_ad')
         if selected_ad:
-            # Повторяем вывод объявления и действий
             text = f"""
 🆔 ID: {selected_ad[0]}
 📌 Категория: {selected_ad[2]}
@@ -561,9 +484,8 @@ async def my_ad_edit_field(message: Message, state: FSMContext):
             await message.answer(text)
             actions_kb = ReplyKeyboardMarkup(
                 keyboard=[
-                    [KeyboardButton(text="✏️ Редактировать")],
-                    [KeyboardButton(text="🗑️ Удалить")],
-                    [KeyboardButton(text="⬅️ Назад")]
+                    [KeyboardButton(text="✏️ Редактировать"), KeyboardButton(text="🗑️ Удалить")],
+                    [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
                 ],
                 resize_keyboard=True
             )
@@ -600,17 +522,14 @@ async def my_ad_edit_field(message: Message, state: FSMContext):
     else:
         await message.answer("Пожалуйста, выберите поле из списка.")
 
-# --- Ввод нового значения ---
 @dp.message(StateFilter(AdStates.my_ad_edit_value))
 async def my_ad_edit_value(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        # Возвращаемся к выбору поля
         edit_kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="🏷️ Заголовок")],
-                [KeyboardButton(text="📝 Описание")],
+                [KeyboardButton(text="🏷️ Заголовок"), KeyboardButton(text="📝 Описание")],
                 [KeyboardButton(text="📞 Контакт")],
-                [KeyboardButton(text="⬅️ Назад")]
+                [KeyboardButton(text="⬅️ Назад")], # Центрированная кнопка назад
             ],
             resize_keyboard=True
         )
@@ -630,16 +549,10 @@ async def my_ad_edit_value(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Обновляем в базе данных
     try:
         database.update_ad_field(ad_id, field_name, new_value)
-        # Обновляем главное меню после редактирования (не нужно)
-        # global main_menu
-        # main_menu = create_main_menu()
         ads_submenu = create_ads_submenu()
         await message.answer(f"✅ Поле успешно обновлено!", reply_markup=ads_submenu)
-
-        # Очищаем состояние и возвращаемся в подменю объявлений
         await state.clear()
     except Exception as e:
         logging.error(f"Ошибка при обновлении поля: {e}")
@@ -648,20 +561,21 @@ async def my_ad_edit_value(message: Message, state: FSMContext):
         await state.clear()
 
 # --- Раздел "Потеряшки" ---
-
-# --- 1. Добавление записи ---
 @dp.message(F.text == "➕ Сообщить")
 async def finds_start_add(message: Message, state: FSMContext):
     find_type_kb = create_find_type_kb()
     await state.set_state(FindStates.choosing_type)
     await message.answer("Выберите тип записи:", reply_markup=find_type_kb)
 
-# Обработка выбора типа
 @dp.message(StateFilter(FindStates.choosing_type))
 async def finds_process_type(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
         finds_submenu = create_finds_submenu()
         await state.clear()
+        # Очищаем временные фото при отмене
+        user_id = message.from_user.id
+        if user_id in user_photos_finds:
+             del user_photos_finds[user_id]
         await message.answer("Раздел: Потеряшки", reply_markup=finds_submenu)
         return
     if message.text not in ["🎁 Нашел", "😢 Потерял"]:
@@ -674,7 +588,6 @@ async def finds_process_type(message: Message, state: FSMContext):
     await state.set_state(FindStates.entering_item)
     await message.answer("Опишите предмет (например, 'Сумка', 'Ключи', 'Телефон'):", reply_markup=cancel_kb)
 
-# Ввод предмета
 @dp.message(StateFilter(FindStates.entering_item))
 async def finds_process_item(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
@@ -686,7 +599,6 @@ async def finds_process_item(message: Message, state: FSMContext):
     await state.set_state(FindStates.entering_description)
     await message.answer("Добавьте описание (цвет, марка, особые приметы):", reply_markup=cancel_kb)
 
-# Ввод описания
 @dp.message(StateFilter(FindStates.entering_description))
 async def finds_process_description(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
@@ -699,7 +611,6 @@ async def finds_process_description(message: Message, state: FSMContext):
     await state.set_state(FindStates.entering_location)
     await message.answer("Где это было?", reply_markup=cancel_kb)
 
-# Ввод места
 @dp.message(StateFilter(FindStates.entering_location))
 async def finds_process_location(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
@@ -712,7 +623,6 @@ async def finds_process_location(message: Message, state: FSMContext):
     await state.set_state(FindStates.entering_date)
     await message.answer("Когда это было? (например, 'Сегодня утром', 'Вчера вечером')", reply_markup=cancel_kb)
 
-# Ввод даты
 @dp.message(StateFilter(FindStates.entering_date))
 async def finds_process_date(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
@@ -725,16 +635,51 @@ async def finds_process_date(message: Message, state: FSMContext):
     await state.set_state(FindStates.entering_contact)
     await message.answer("Контакт для связи (телефон, @username):", reply_markup=cancel_kb)
 
-# Ввод контакта и сохранение
 @dp.message(StateFilter(FindStates.entering_contact))
-async def finds_process_contact_and_save(message: Message, state: FSMContext):
+async def finds_process_contact(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
         data = await state.get_data()
         current_date = data.get('date', '')
         await message.answer(f"Когда это было? (например, 'Сегодня утром', 'Вчера вечером')\n(Текущее: {current_date})", reply_markup=cancel_kb)
         await state.set_state(FindStates.entering_date)
         return
+    await state.update_data(contact=message.text)
+    user_id = message.from_user.id
+    user_photos_finds[user_id] = []
+    await state.set_state(FindStates.uploading_photos)
+    await message.answer("Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — нажмите 'Готово'.", reply_markup=cancel_kb)
 
+@dp.message(StateFilter(FindStates.uploading_photos), F.photo)
+async def finds_process_photo(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if user_id not in user_photos_finds:
+        user_photos_finds[user_id] = []
+    if len(user_photos_finds[user_id]) < 3:
+        user_photos_finds[user_id].append(message.photo[-1].file_id)
+        await message.answer(f"Фото добавлено ({len(user_photos_finds[user_id])}/3)")
+        await asyncio.sleep(0.1)
+    else:
+        await message.answer("Можно загрузить максимум 3 фото.")
+
+@dp.message(StateFilter(FindStates.uploading_photos))
+async def finds_process_photo_done(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        data = await state.get_data()
+        user_id = message.from_user.id
+        photo_count = len(user_photos_finds.get(user_id, []))
+        if photo_count > 0:
+             await message.answer(f"Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — нажмите 'Готово'.\n(Загружено: {photo_count})", reply_markup=cancel_kb)
+        else:
+             # Если фото не было, возвращаемся к контакту
+             current_contact = data.get('contact', '')
+             await message.answer(f"Контакт для связи (телефон, @username):\n(Текущий: {current_contact})", reply_markup=cancel_kb)
+             await state.set_state(FindStates.entering_contact)
+        return
+    # Если текст не "Назад", считаем его сигналом к завершению
+    await finds_save_find(message, state)
+
+async def finds_save_find(message: Message, state: FSMContext):
+    """Функция для сохранения записи в Потеряшки."""
     data = await state.get_data()
     user_id = message.from_user.id
     find_type = data['find_type']
@@ -742,7 +687,8 @@ async def finds_process_contact_and_save(message: Message, state: FSMContext):
     description = data['description']
     location = data['location']
     date = data['date']
-    contact = message.text
+    contact = data['contact']
+    photo_ids = user_photos_finds.get(user_id, [])
     created_at = datetime.now().strftime("%d.%m.%Y %H:%M")
 
     try:
@@ -754,78 +700,101 @@ async def finds_process_contact_and_save(message: Message, state: FSMContext):
             location=location,
             date=date,
             contact=contact,
+            photo_ids=photo_ids,
             created_at=created_at
         )
         finds_submenu = create_finds_submenu()
+        # Очищаем временные фото после успешного добавления
+        if user_id in user_photos_finds:
+             del user_photos_finds[user_id]
         await message.answer("✅ Запись успешно добавлена!", reply_markup=finds_submenu)
     except Exception as e:
         logging.error(f"Ошибка при добавлении записи в Потеряшки: {e}")
         finds_submenu = create_finds_submenu()
         await message.answer("❌ Произошла ошибка при добавлении записи. Попробуйте позже.", reply_markup=finds_submenu)
+        # Не очищаем фото, пусть пользователь решает
 
     await state.clear()
 
-# --- 2. Просмотр записей ---
-# --- Просмотр "Найдено" ---
 @dp.message(F.text == "👀 Найдено")
 async def finds_show_found(message: Message):
-    try:
-        found_items = database.get_finds_by_type("found")
-        finds_submenu = create_finds_submenu()
-        if not found_items:
-            await message.answer("📭 Пока никто ничего не нашел.", reply_markup=finds_submenu)
-            return
+     try:
+         found_items = database.get_finds_by_type("found")
+         finds_submenu = create_finds_submenu()
+         if not found_items:
+             await message.answer("📭 Пока никто ничего не нашел.", reply_markup=finds_submenu)
+             return
 
-        await message.answer("🔍 Найдено:", reply_markup=finds_submenu)
-        for item in found_items[:10]: # Показываем первые 10
-             text = f"""
+         await message.answer("🔍 Найдено:", reply_markup=ReplyKeyboardRemove()) # Скрываем клавиатуру перед списком
+
+         for i, item in enumerate(found_items[:10]):
+              text = f"""
 📌 Предмет: {item[3]}
 📝 Описание: {item[4]}
 📍 Где: {item[5]}
 📅 Когда: {item[6]}
 📞 Контакт: {item[7]}
-🕒 Дата публикации: {item[8]}
-             """
-             await message.answer(text)
-             await asyncio.sleep(0.1) # Минимальная пауза во избежание флуда
-    except Exception as e:
-        logging.error(f"Ошибка при показе найденных предметов: {e}")
-        finds_submenu = create_finds_submenu()
-        await message.answer("❌ Произошла ошибка при получении списка находок.", reply_markup=finds_submenu)
+🕒 Дата публикации: {item[9]}
+              """
+              await message.answer(text)
+              photo_ids = item[8] # Предполагаем, что photo_ids теперь в столбце 8
+              if photo_ids:
+                  try:
+                      photo_list = photo_ids.split(',')
+                      media = [types.InputMediaPhoto(media=pid) for pid in photo_list[:10]]
+                      await bot.send_media_group(chat_id=message.chat.id, media=media)
+                  except Exception as e:
+                      logging.error(f"Ошибка при отправке фото для записи {item[0]}: {e}")
+                  await asyncio.sleep(0.5)
+              if i < len(found_items[:10]) - 1:
+                  await asyncio.sleep(0.5)
 
-# --- Просмотр "Потеряно" ---
+         # Возвращаем клавиатуру в конце
+         await message.answer("Поиск завершен.", reply_markup=finds_submenu)
+     except Exception as e:
+         logging.error(f"Ошибка при показе найденных предметов: {e}")
+         finds_submenu = create_finds_submenu()
+         await message.answer("❌ Произошла ошибка при получении списка находок.", reply_markup=finds_submenu)
+
 @dp.message(F.text == "🆘 Потеряно")
 async def finds_show_lost(message: Message):
-    try:
-        lost_items = database.get_finds_by_type("lost")
-        finds_submenu = create_finds_submenu()
-        if not lost_items:
-            await message.answer("📭 Пока никто ничего не потерял.", reply_markup=finds_submenu)
-            return
+     try:
+         lost_items = database.get_finds_by_type("lost")
+         finds_submenu = create_finds_submenu()
+         if not lost_items:
+             await message.answer("📭 Пока никто ничего не потерял.", reply_markup=finds_submenu)
+             return
 
-        await message.answer("🆘 Потеряно:", reply_markup=finds_submenu)
-        for item in lost_items[:10]: # Показываем первые 10
-             text = f"""
+         await message.answer("🆘 Потеряно:", reply_markup=ReplyKeyboardRemove()) # Скрываем клавиатуру перед списком
+
+         for i, item in enumerate(lost_items[:10]):
+              text = f"""
 📌 Предмет: {item[3]}
 📝 Описание: {item[4]}
 📍 Где: {item[5]}
 📅 Когда: {item[6]}
 📞 Контакт: {item[7]}
-🕒 Дата публикации: {item[8]}
-             """
-             await message.answer(text)
-             await asyncio.sleep(0.1) # Минимальная пауза во избежание флуда
-    except Exception as e:
-        logging.error(f"Ошибка при показе потерянных предметов: {e}")
-        finds_submenu = create_finds_submenu()
-        await message.answer("❌ Произошла ошибка при получении списка потерь.", reply_markup=finds_submenu)
+🕒 Дата публикации: {item[9]}
+              """
+              await message.answer(text)
+              photo_ids = item[8] # Предполагаем, что photo_ids теперь в столбце 8
+              if photo_ids:
+                  try:
+                      photo_list = photo_ids.split(',')
+                      media = [types.InputMediaPhoto(media=pid) for pid in photo_list[:10]]
+                      await bot.send_media_group(chat_id=message.chat.id, media=media)
+                  except Exception as e:
+                      logging.error(f"Ошибка при отправке фото для записи {item[0]}: {e}")
+                  await asyncio.sleep(0.5)
+              if i < len(lost_items[:10]) - 1:
+                  await asyncio.sleep(0.5)
 
-# --- 3. Мои записи ---
-# (Логика будет аналогична "Мои объявления", но для таблицы `finds`)
-# ... (Можно реализовать позже по аналогии с `my_ads_start` и т.д.)
-
-# --- Обработчики для "📝 Мои записи", редактирования и удаления ---
-# ... (Можно реализовать позже)
+         # Возвращаем клавиатуру в конце
+         await message.answer("Поиск завершен.", reply_markup=finds_submenu)
+     except Exception as e:
+         logging.error(f"Ошибка при показе потерянных предметов: {e}")
+         finds_submenu = create_finds_submenu()
+         await message.answer("❌ Произошла ошибка при получении списка потерь.", reply_markup=finds_submenu)
 
 # --- Админка (оставлена как в предыдущем коде) ---
 @dp.message(Command("admin"))
@@ -834,7 +803,6 @@ async def admin_start(message: Message, command: CommandObject):
         await message.answer("❌ Доступ запрещён!")
         return
 
-    # Если передан ID объявления для удаления
     if command.args and command.args.isdigit():
         ad_id = int(command.args)
         ad = database.get_ad_by_id(ad_id)
@@ -866,7 +834,7 @@ async def admin_list(message: Message):
 
     await message.answer("📄 Все объявления:")
 
-    for ad in ads[:10]:  # Показываем первые 10
+    for ad in ads[:10]:
         text = f"""
 🆔 ID: {ad[0]}
 📌 {ad[3]}
@@ -877,7 +845,6 @@ async def admin_list(message: Message):
         """
         await message.answer(text)
 
-# Обработка кнопок удаления
 @dp.message(lambda message: message.text and message.text.startswith("/delete_"))
 async def delete_ad_handler(message: Message):
     if message.from_user.id != config.ADMIN_ID:
