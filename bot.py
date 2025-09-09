@@ -7,7 +7,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from datetime import datetime
 import asyncio
 import logging
-import aiogram.exceptions # Для обработки TelegramRetryAfter
+import aiogram.exceptions  # Для обработки TelegramRetryAfter
 
 import config
 import database
@@ -84,7 +84,6 @@ class AdStates(StatesGroup):
     description = State()
     photo = State()
     contact = State()
-    # Убираем search_category, так как теперь есть отдельный обработчик
     browse_category = State() # Новое состояние для просмотра по категориям
     my_ads_list = State()
     my_ad_selected = State()
@@ -98,11 +97,27 @@ dp = Dispatcher()
 # --- Обработчики ---
 @dp.message(Command("start"))
 async def start(message: Message):
+    """Обработчик команды /start. Добавляет пользователя в БД."""
+    # Добавляем пользователя в БД при первом взаимодействии
+    user_id = message.from_user.id
+    username = message.from_user.username
+    database.add_user(user_id, username)
+
+    logging.info(f"Пользователь {user_id} запустил бота.")
+    # Небольшая пауза перед отправкой, чтобы избежать флуда при быстром переподключении
+    await asyncio.sleep(0.1) 
     main_menu = create_main_menu()
-    await message.answer(
-        "📢 Добро пожаловать в Объявления!\nВыберите действие:",
-        reply_markup=main_menu
-    )
+    try:
+        await message.answer(
+            "📢 Добро пожаловать в Объявления!\nВыберите действие:",
+            reply_markup=main_menu
+        )
+        logging.info(f"Приветственное сообщение отправлено пользователю {user_id}.")
+    except aiogram.exceptions.TelegramRetryAfter as e:
+        logging.warning(f"Флуд-контроль при отправке приветствия пользователю {user_id}: {e}")
+        # В данном случае мы ничего не отправляем, пусть пользователь сам нажмет /start еще раз
+    except Exception as e:
+        logging.error(f"Ошибка при отправке приветствия пользователю {user_id}: {e}")
 
 # --- Подача объявления ---
 @dp.message(F.text == "➕ Подать объявление")
@@ -212,6 +227,17 @@ async def process_contact(message: Message, state: FSMContext):
         if user_id in user_photos:
             del user_photos[user_id]
         await message.answer("✅ Объявление успешно опубликовано!", reply_markup=main_menu)
+        
+        # --- Уведомление админу о новом объявлении ---
+        try:
+            await bot.send_message(
+                chat_id=config.ADMIN_ID,
+                text=f"🔔 Новое объявление!\nКатегория: {data['category']}\nЗаголовок: {data['title']}\nАвтор: {user_id}"
+            )
+            logging.info("Уведомление о новом объявлении отправлено админу.")
+        except Exception as e:
+            logging.error(f"Ошибка при отправке уведомления админу: {e}")
+
     except Exception as e:
         logging.error(f"Ошибка при добавлении объявления: {e}")
         main_menu = create_main_menu()
@@ -595,7 +621,7 @@ async def admin_start(message: Message, command: CommandObject):
             await message.answer("❌ Объявление не найдено.")
         return
 
-    await message.answer("🔧 Админ-панель\nВведите /admin_list для просмотра всех объявлений")
+    await message.answer("🔧 Админ-панель\nВведите /admin_list для просмотра всех объявлений\nВведите /broadcast <текст> для рассылки")
 
 @dp.message(Command("admin_list"))
 async def admin_list(message: Message):
@@ -638,14 +664,70 @@ async def delete_ad_handler(message: Message):
         ad = database.get_ad_by_id(ad_id)
         if ad:
             database.delete_ad(ad_id)
-            # Обновляем главное меню после удаления через админку
-            # main_menu = create_main_menu() # Не будем обновлять тут, чтобы не мешать админу
             await message.answer(f"✅ Объявление #{ad_id} удалено!")
         else:
             await message.answer("❌ Объявление не найдено.")
     except Exception as e:
         logging.error(f"Ошибка в delete_ad_handler: {e}")
         await message.answer("❌ Неверный формат команды.")
+
+# --- Рассылка от администратора ---
+@dp.message(Command("broadcast"))
+async def broadcast_message(message: Message, command: CommandObject):
+    """Отправляет сообщение всем пользователям бота. Использование: /broadcast <текст сообщения>"""
+    if message.from_user.id != config.ADMIN_ID:
+        await message.answer("❌ Доступ запрещён!")
+        return
+
+    # Получаем текст сообщения после команды
+    if not command.args:
+        await message.answer("Пожалуйста, введите текст сообщения после команды /broadcast\nПример: /broadcast Привет всем!")
+        return
+
+    text_to_send = command.args
+    await message.answer("⏳ Начинаю рассылку...")
+
+    try:
+        user_ids = database.get_all_users()
+        if not user_ids:
+             await message.answer("📭 Нет пользователей для рассылки.")
+             return
+
+        count = 0
+        count_blocked = 0
+        for user_id in user_ids:
+            try:
+                await bot.send_message(chat_id=user_id, text=text_to_send)
+                count += 1
+                # Пауза, чтобы не превысить лимиты Telegram
+                # Согласно FAQ: ~30 сообщений в секунду бесплатно.
+                # Пауза 1/30 = 0.033 секунды. Сделаем немного больше для надежности.
+                await asyncio.sleep(0.05) 
+            except aiogram.exceptions.TelegramForbiddenError:
+                # Пользователь заблокировал бота
+                logging.info(f"Пользователь {user_id} заблокировал бота, пропускаем.")
+                count_blocked += 1
+            except aiogram.exceptions.TelegramRetryAfter as e:
+                # Очень много сообщений, даже с паузами
+                logging.warning(f"Флуд-контроль при рассылке: {e}. Ждем {e.retry_after} секунд.")
+                await message.answer(f"⏳ Флуд-контроль: ждем {e.retry_after} секунд...")
+                await asyncio.sleep(e.retry_after)
+                # Повторная попытка отправить сообщение этому пользователю
+                try:
+                     await bot.send_message(chat_id=user_id, text=text_to_send)
+                     count += 1
+                     await asyncio.sleep(0.05)
+                except Exception as e2:
+                     logging.error(f"Ошибка при повторной отправке сообщения пользователю {user_id}: {e2}")
+                     # Не увеличиваем счетчик, считаем как неудачную попытку
+            except Exception as e:
+                logging.error(f"Ошибка при отправке сообщения пользователю {user_id}: {e}")
+                # Не прерываем рассылку из-за ошибки у одного пользователя
+        
+        await message.answer(f"✅ Рассылка завершена!\nСообщение отправлено: {count}\nЗаблокировали бота: {count_blocked}")
+    except Exception as e:
+        logging.error(f"Ошибка в /broadcast: {e}")
+        await message.answer("❌ Произошла ошибка при рассылке.")
 
 # --- Запуск ---
 async def main():
