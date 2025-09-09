@@ -4,11 +4,11 @@ from datetime import datetime
 from typing import List, Tuple, Any, Optional
 
 def init_db():
-    """Создает таблицы объявлений и пользователей, если их еще нет."""
+    """Создает таблицы объявлений, пользователей и комментариев, если их еще нет."""
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
-    
-    # Создание таблицы объявлений (без изменений)
+
+    # Создание таблицы объявлений
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,12 +30,23 @@ def init_db():
             first_interaction TEXT NOT NULL
         )
     ''')
-    
+
+    # Создание таблицы комментариев
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ad_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (ad_id) REFERENCES ads (id) ON DELETE CASCADE
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
 # --- Функции для работы с "Объявлениями" (ads) ---
-# (оставляем без изменений, приведены для полноты)
 def add_ad(user_id: int, category: str, title: str, description: str, photo_ids: List[str], contact: str, created_at: str):
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
@@ -101,7 +112,7 @@ def update_ad_field(ad_id: int, field_name: str, new_value: str):
     conn.commit()
     conn.close()
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПОЛЬЗОВАТЕЛЯМИ ---
+# --- Функции для работы с "Пользователями" (users) ---
 def add_user(user_id: int, username: str = None):
     """Добавляет пользователя в БД, если его там еще нет."""
     conn = sqlite3.connect('ads.db')
@@ -122,6 +133,34 @@ def get_all_users() -> List[int]:
     rows = cursor.fetchall()
     conn.close()
     return [row[0] for row in rows] # Возвращаем список ID
+
+# --- Функции для работы с "Комментариями" (comments) ---
+def add_comment(ad_id: int, user_id: int, text: str, created_at: str):
+    """Добавляет новый комментарий к объявлению."""
+    conn = sqlite3.connect('ads.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO comments (ad_id, user_id, text, created_at)
+        VALUES (?, ?, ?, ?)
+    ''', (ad_id, user_id, text, created_at))
+    conn.commit()
+    conn.close()
+
+def get_comments_by_ad_id(ad_id: int) -> List[Tuple[Any, ...]]:
+    """Получает все комментарии для конкретного объявления, отсортированные по дате (новые первые)."""
+    conn = sqlite3.connect('ads.db')
+    cursor = conn.cursor()
+    # Получаем комментарии вместе с информацией о пользователе (username)
+    cursor.execute('''
+        SELECT c.id, c.ad_id, c.user_id, c.text, c.created_at, u.username
+        FROM comments c
+        LEFT JOIN users u ON c.user_id = u.user_id
+        WHERE c.ad_id = ?
+        ORDER BY c.id ASC -- От старых к новым
+    ''', (ad_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 # Инициализация БД при импорте модуля
 init_db()
