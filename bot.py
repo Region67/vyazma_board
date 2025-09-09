@@ -1,6 +1,6 @@
 # bot.py
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, StateFilter, CommandObject  # Исправленный импорт
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
@@ -8,7 +8,7 @@ from datetime import datetime
 import asyncio
 import logging
 
-import config from aiogram.filters import CommandObject
+import config  # Исправленный импорт
 import database
 
 # Настройка логирования
@@ -72,6 +72,7 @@ async def start(message: Message):
         "📢 Добро пожаловать в Объявления города Вязьма!\nВыберите действие:",
         reply_markup=main_menu
     )
+
 # Админка
 @dp.message(Command("admin"))
 async def admin_start(message: Message, command: CommandObject):
