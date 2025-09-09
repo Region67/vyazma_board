@@ -36,3 +36,17 @@ def get_all_ads():
     rows = cursor.fetchall()
     conn.close()
     return rows
+def delete_ad(ad_id: int):
+    conn = sqlite3.connect('ads.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM ads WHERE id = ?', (ad_id,))
+    conn.commit()
+    conn.close()
+
+def get_ad_by_id(ad_id: int):
+    conn = sqlite3.connect('ads.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM ads WHERE id = ?', (ad_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
