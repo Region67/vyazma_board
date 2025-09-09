@@ -1,11 +1,14 @@
 # database.py
 import sqlite3
+from datetime import datetime
 from typing import List, Tuple, Any, Optional
 
 def init_db():
-    """Создает таблицу объявлений, если её еще нет."""
+    """Создает таблицы объявлений и пользователей, если их еще нет."""
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
+    
+    # Создание таблицы объявлений (без изменений)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,11 +21,22 @@ def init_db():
             created_at TEXT NOT NULL
         )
     ''')
+
+    # Создание таблицы пользователей
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_interaction TEXT NOT NULL
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
+# --- Функции для работы с "Объявлениями" (ads) ---
+# (оставляем без изменений, приведены для полноты)
 def add_ad(user_id: int, category: str, title: str, description: str, photo_ids: List[str], contact: str, created_at: str):
-    """Добавляет новое объявление в базу данных."""
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -33,7 +47,6 @@ def add_ad(user_id: int, category: str, title: str, description: str, photo_ids:
     conn.close()
 
 def get_all_ads() -> List[Tuple[Any, ...]]:
-    """Получает все объявления, отсортированные по ID (новые первые)."""
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM ads ORDER BY id DESC')
@@ -42,7 +55,6 @@ def get_all_ads() -> List[Tuple[Any, ...]]:
     return rows
 
 def delete_ad(ad_id: int):
-    """Удаляет объявление по его ID."""
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM ads WHERE id = ?', (ad_id,))
@@ -50,7 +62,6 @@ def delete_ad(ad_id: int):
     conn.close()
 
 def get_ad_by_id(ad_id: int) -> Optional[Tuple[Any, ...]]:
-    """Получает одно объявление по его ID."""
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM ads WHERE id = ?', (ad_id,))
@@ -59,7 +70,6 @@ def get_ad_by_id(ad_id: int) -> Optional[Tuple[Any, ...]]:
     return row
 
 def get_ads_by_category(category: str) -> List[Tuple[Any, ...]]:
-    """Получает все объявления из указанной категории, отсортированные по ID (новые первые)."""
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM ads WHERE category = ? ORDER BY id DESC', (category,))
@@ -68,7 +78,6 @@ def get_ads_by_category(category: str) -> List[Tuple[Any, ...]]:
     return rows
 
 def get_ads_by_user_id(user_id: int) -> List[Tuple[Any, ...]]:
-    """Получает все объявления, созданные указанным пользователем, отсортированные по ID (новые первые)."""
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM ads WHERE user_id = ? ORDER BY id DESC', (user_id,))
@@ -77,26 +86,42 @@ def get_ads_by_user_id(user_id: int) -> List[Tuple[Any, ...]]:
     return rows
 
 def update_ad_field(ad_id: int, field_name: str, new_value: str):
-    """
-    Обновляет значение конкретного поля объявления.
-    field_name должно соответствовать имени столбца в БД: 'title', 'description', 'contact'.
-    """
     db_field_map = {
         "title": "title",
         "description": "description",
         "contact": "contact"
     }
-
     db_field = db_field_map.get(field_name)
     if not db_field:
         raise ValueError(f"Недопустимое имя поля для обновления: {field_name}")
-
     conn = sqlite3.connect('ads.db')
     cursor = conn.cursor()
     query = f"UPDATE ads SET {db_field} = ? WHERE id = ?"
     cursor.execute(query, (new_value, ad_id))
     conn.commit()
     conn.close()
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПОЛЬЗОВАТЕЛЯМИ ---
+def add_user(user_id: int, username: str = None):
+    """Добавляет пользователя в БД, если его там еще нет."""
+    conn = sqlite3.connect('ads.db')
+    cursor = conn.cursor()
+    # Используем INSERT OR IGNORE, чтобы не было дубликатов
+    cursor.execute('''
+        INSERT OR IGNORE INTO users (user_id, username, first_interaction)
+        VALUES (?, ?, ?)
+    ''', (user_id, username, datetime.now().strftime("%d.%m.%Y %H:%M")))
+    conn.commit()
+    conn.close()
+
+def get_all_users() -> List[int]:
+    """Получает список всех user_id."""
+    conn = sqlite3.connect('ads.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id FROM users')
+    rows = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in rows] # Возвращаем список ID
 
 # Инициализация БД при импорте модуля
 init_db()
