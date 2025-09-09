@@ -30,7 +30,7 @@ CATEGORIES_LIST = [
 
 # --- Клавиатуры ---
 def create_main_menu():
-    """Создает главное меню."""
+    """Создает главное меню в 2 столбца."""
     # Получаем общее количество объявлений для кнопки "Все объявления"
     try:
         total_ads_count = len(database.get_all_ads())
@@ -40,10 +40,8 @@ def create_main_menu():
 
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Подать объявление")],
-            [KeyboardButton(text=f"🔍 Все объявления ({total_ads_count})")],
-            [KeyboardButton(text="📂 По категориям")], # Новая кнопка
-            [KeyboardButton(text="👤 Мои объявления")],
+            [KeyboardButton(text="➕ Подать объявление"), KeyboardButton(text=f"🔍 Все объявления ({total_ads_count})")],
+            [KeyboardButton(text="📂 По категориям"), KeyboardButton(text="👤 Мои объявления")],
         ],
         resize_keyboard=True
     )
