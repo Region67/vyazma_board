@@ -8,7 +8,7 @@ from datetime import datetime
 import asyncio
 import logging
 
-import config
+import config from aiogram.filters import CommandObject
 import database
 
 # Настройка логирования
@@ -58,6 +58,8 @@ class AdStates(StatesGroup):
     photo = State()
     contact = State()
     search_category = State()
+    admin_menu = State()
+    admin_delete = State()
 
 # --- Инициализация бота ---
 bot = Bot(token=config.API_TOKEN)
@@ -70,6 +72,67 @@ async def start(message: Message):
         "📢 Добро пожаловать в Объявления города Вязьма!\nВыберите действие:",
         reply_markup=main_menu
     )
+# Админка
+@dp.message(Command("admin"))
+async def admin_start(message: Message, command: CommandObject):
+    if message.from_user.id != config.ADMIN_ID:
+        await message.answer("❌ Доступ запрещён!")
+        return
+    
+    # Если передан ID объявления для удаления
+    if command.args and command.args.isdigit():
+        ad_id = int(command.args)
+        ad = database.get_ad_by_id(ad_id)
+        if ad:
+            database.delete_ad(ad_id)
+            await message.answer(f"✅ Объявление #{ad_id} удалено!")
+        else:
+            await message.answer("❌ Объявление не найдено.")
+        return
+
+    await message.answer("🔧 Админ-панель\nВведите /admin_list для просмотра всех объявлений")    
+
+@dp.message(Command("admin_list"))
+async def admin_list(message: Message):
+    if message.from_user.id != config.ADMIN_ID:
+        await message.answer("❌ Доступ запрещён!")
+        return
+
+    ads = database.get_all_ads()
+    if not ads:
+        await message.answer("📭 Нет объявлений.")
+        return
+
+    await message.answer("📄 Все объявления:")
+
+    for ad in ads[:10]:  # Показываем первые 10
+        text = f"""
+🆔 ID: {ad[0]}
+📌 {ad[3]}
+{ad[4][:100]}...
+
+📅 {ad[7]}
+/delete_{ad[0]} - Удалить
+        """
+        await message.answer(text)
+
+# Обработка кнопок удаления
+@dp.message(lambda message: message.text and message.text.startswith("/delete_"))
+async def delete_ad_handler(message: Message):
+    if message.from_user.id != config.ADMIN_ID:
+        await message.answer("❌ Доступ запрещён!")
+        return
+
+    try:
+        ad_id = int(message.text.split("_")[1])
+        ad = database.get_ad_by_id(ad_id)
+        if ad:
+            database.delete_ad(ad_id)
+            await message.answer(f"✅ Объявление #{ad_id} удалено!")
+        else:
+            await message.answer("❌ Объявление не найдено.")
+    except:
+        await message.answer("❌ Неверный формат команды.")
 
 @dp.message(F.text == "➕ Подать объявление")
 async def new_ad_start(message: Message, state: FSMContext):
