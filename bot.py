@@ -25,7 +25,7 @@ user_photos = {}
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Подать объявление")],
-        [KeyboardButton(text="🔍 Поиск по категориям")]
+        [KeyboardButton(text="🔍 Все объявления")]
     ],
     resize_keyboard=True
 )
@@ -67,7 +67,7 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def start(message: Message):
     await message.answer(
-        "📢 Добро пожаловать в Объявленияu города Вязьма!\nВыберите действие:",
+        "📢 Добро пожаловать в Объявления города Вязьма!\nВыберите действие:",
         reply_markup=main_menu
     )
 
@@ -83,18 +83,18 @@ async def process_category(message: Message, state: FSMContext):
         await message.answer("Главное меню", reply_markup=main_menu)
         return
     if message.text not in categories_list:
-        await message.answer("Пожалуйста, выберите категорию из списка.", reply_markup=categories_kb)
+        await message.answer("Пожалуйста, выберите категорию из списка 👇.", reply_markup=categories_kb)
         return
 
     await state.update_data(category=message.text)
     # Скрываем клавиатуру категорий
-    await message.answer("Введите заголовок объявления:", reply_markup=main_menu)
+    await message.answer("Введите заголовок объявления: ✅", reply_markup=main_menu)
     await state.set_state(AdStates.title)
 
 @dp.message(StateFilter(AdStates.title))
 async def process_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
-    await message.answer("Введите описание объявления:")
+    await message.answer("Введите описание объявления: 💬")
     await state.set_state(AdStates.description)
 
 @dp.message(StateFilter(AdStates.description))
@@ -116,7 +116,7 @@ async def process_photo(message: Message, state: FSMContext):
 
 @dp.message(StateFilter(AdStates.photo))
 async def process_photo_done(message: Message, state: FSMContext):
-    await message.answer("Введите контакт (телефон, @username или слово 'через бота'):")
+    await message.answer("Введите контакт 📞(телефон, @username):")
     await state.set_state(AdStates.contact)
 
 @dp.message(StateFilter(AdStates.contact))
@@ -142,9 +142,9 @@ async def process_contact(message: Message, state: FSMContext):
         del user_photos[user_id]
 
 # --- Поиск по категориям ---
-@dp.message(F.text == "🔍 Поиск по категориям")
+@dp.message(F.text == "🔍 Все объявления")
 async def search_by_category_start(message: Message, state: FSMContext):
-    await message.answer("Выберите категорию для поиска:", reply_markup=search_categories_kb)
+    await message.answer("Выберите категорию:", reply_markup=search_categories_kb)
     await state.set_state(AdStates.search_category)
 
 @dp.message(StateFilter(AdStates.search_category))
@@ -179,7 +179,7 @@ async def process_search_category(message: Message, state: FSMContext):
         for i, ad in enumerate(ads[:5]):
             text = f"""
 📌 {ad[3]}  # Заголовок
-{ad[4]}      # Описание
+💬 {ad[4]}      # Описание
 
 📞 Контакт: {ad[6]}
 📅 Дата: {ad[7]}
