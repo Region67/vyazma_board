@@ -9,6 +9,7 @@ import asyncio
 import logging
 
 import config  # Исправленный импорт
+from aiogram.filters import CommandObject
 import database
 
 # Настройка логирования
