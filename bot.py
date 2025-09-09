@@ -3,7 +3,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, StateFilter, CommandObject
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from datetime import datetime
 import asyncio
 import logging
@@ -28,14 +28,22 @@ categories_list = [
     "🐶 Отдам даром", "🎓 Обучение"
 ]
 
-# Создание клавиатуры категорий в 2 столбца с количеством объявлений
-def create_categories_keyboard():
+# Создание клавиатуры категорий в 2 столбца БЕЗ количества объявлений (для добавления)
+def create_simple_categories_keyboard():
+    categories_kb_rows = []
+    for i in range(0, len(categories_list), 2):
+        row = [KeyboardButton(text=cat) for cat in categories_list[i:i+2]]
+        categories_kb_rows.append(row)
+    categories_kb_rows.append([KeyboardButton(text="⬅️ Назад")])
+    return ReplyKeyboardMarkup(keyboard=categories_kb_rows, resize_keyboard=True)
+
+# Создание клавиатуры категорий в 2 столбца С количеством объявлений (для поиска)
+def create_search_categories_keyboard():
     categories_kb_rows = []
     for i in range(0, len(categories_list), 2):
         row_buttons = []
         for cat in categories_list[i:i+2]:
             # Получаем количество объявлений в этой категории
-            # Убедись, что в database.py есть функция get_ads_by_category
             try:
                 count = len(database.get_ads_by_category(cat))
             except Exception as e:
@@ -45,6 +53,12 @@ def create_categories_keyboard():
         categories_kb_rows.append(row_buttons)
     categories_kb_rows.append([KeyboardButton(text="⬅️ Назад")])
     return ReplyKeyboardMarkup(keyboard=categories_kb_rows, resize_keyboard=True)
+
+# Клавиатура "Отмена" для скрытия меню во время ввода
+cancel_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="⬅️ Назад")]],
+    resize_keyboard=True
+)
 
 # Главное меню (создаётся динамически)
 def create_main_menu():
@@ -66,7 +80,6 @@ def create_main_menu():
     return main_menu
 
 # Используем функцию для создания клавиатур
-# categories_kb и search_categories_kb создаются динамически при необходимости
 # main_menu создаётся при запуске
 main_menu = create_main_menu()
 
@@ -178,9 +191,9 @@ async def delete_ad_handler(message: Message):
 # --- Подача объявления ---
 @dp.message(F.text == "➕ Подать объявление")
 async def new_ad_start(message: Message, state: FSMContext):
-    # Пересоздаем клавиатуру с актуальным количеством
-    updated_kb = create_categories_keyboard()
-    await message.answer("Выберите категорию:", reply_markup=updated_kb)
+    # Используем УПРОЩЕННУЮ клавиатуру без количества
+    simple_kb = create_simple_categories_keyboard()
+    await message.answer("Выберите категорию:", reply_markup=simple_kb)
     await state.set_state(AdStates.category)
 
 @dp.message(StateFilter(AdStates.category))
@@ -192,34 +205,53 @@ async def process_category(message: Message, state: FSMContext):
         await message.answer("Главное меню", reply_markup=updated_main_menu)
         return
 
-    # Извлекаем название категории без количества "(...)"
-    selected_category_text = message.text.split(" (")[0]
-    if selected_category_text not in categories_list:
-        updated_kb = create_categories_keyboard()
-        await message.answer("Пожалуйста, выберите категорию из списка 👇.", reply_markup=updated_kb)
+    # Проверяем по оригинальному списку, так как в кнопках нет количества
+    if message.text not in categories_list:
+        simple_kb = create_simple_categories_keyboard()
+        await message.answer("Пожалуйста, выберите категорию из списка 👇.", reply_markup=simple_kb)
         return
 
-    await state.update_data(category=selected_category_text)
-    # Скрываем клавиатуру категорий, показываем главное меню
-    updated_main_menu = create_main_menu()
-    await message.answer("Введите заголовок объявления: ✅", reply_markup=updated_main_menu)
+    await state.update_data(category=message.text)
+    # Скрываем клавиатуру категорий, показываем клавиатуру "Отмена"
+    await message.answer("Введите заголовок объявления: ✅", reply_markup=cancel_kb)
     await state.set_state(AdStates.title)
 
 @dp.message(StateFilter(AdStates.title))
 async def process_title(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+         # Возвращаемся к выбору категории
+         await new_ad_start(message, state) # Повторно вызываем, чтобы показать клавиатуру категорий
+         return
+         
     await state.update_data(title=message.text)
-    await message.answer("Введите описание объявления: 💬")
+    await message.answer("Введите описание объявления: 💬", reply_markup=cancel_kb)
     await state.set_state(AdStates.description)
 
 @dp.message(StateFilter(AdStates.description))
 async def process_description(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        # Возвращаемся к вводу заголовка
+        data = await state.get_data()
+        current_title = data.get('title', '')
+        await message.answer(f"Введите заголовок объявления: ✅\n(Текущий: {current_title})", reply_markup=cancel_kb)
+        await state.set_state(AdStates.title)
+        return
+        
     await state.update_data(description=message.text)
     user_photos[message.from_user.id] = []
-    await message.answer("Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — отправьте любой текст.")
+    await message.answer("Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — отправьте любой текст.", reply_markup=cancel_kb)
     await state.set_state(AdStates.photo)
 
 @dp.message(StateFilter(AdStates.photo), F.photo)
 async def process_photo(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        # Возвращаемся к вводу описания
+        data = await state.get_data()
+        current_desc = data.get('description', '')
+        await message.answer(f"Введите описание объявления: 💬\n(Текущее: {current_desc[:50]}...)", reply_markup=cancel_kb)
+        await state.set_state(AdStates.description)
+        return
+        
     user_id = message.from_user.id
     if len(user_photos[user_id]) < 3:
         user_photos[user_id].append(message.photo[-1].file_id)
@@ -230,11 +262,34 @@ async def process_photo(message: Message, state: FSMContext):
 
 @dp.message(StateFilter(AdStates.photo))
 async def process_photo_done(message: Message, state: FSMContext):
-    await message.answer("Введите контакт 📞(телефон, @username):")
+    if message.text == "⬅️ Назад":
+        # Возвращаемся к загрузке фото (или к описанию, если фото уже есть)
+        data = await state.get_data()
+        user_id = message.from_user.id
+        photo_count = len(user_photos.get(user_id, []))
+        if photo_count > 0:
+             await message.answer(f"Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — отправьте любой текст.\n(Загружено: {photo_count})", reply_markup=cancel_kb)
+        else:
+             # Если фото не было, возвращаемся к описанию
+             current_desc = data.get('description', '')
+             await message.answer(f"Введите описание объявления: 💬\n(Текущее: {current_desc[:50]}...)", reply_markup=cancel_kb)
+             await state.set_state(AdStates.description)
+        return
+        
+    await message.answer("Введите контакт 📞(телефон, @username):", reply_markup=cancel_kb)
     await state.set_state(AdStates.contact)
 
 @dp.message(StateFilter(AdStates.contact))
 async def process_contact(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        # Возвращаемся к загрузке фото/завершению
+        data = await state.get_data()
+        user_id = message.from_user.id
+        photo_count = len(user_photos.get(user_id, []))
+        await message.answer(f"Загрузите фото (до 3 шт, по одному). 👉 Когда закончите — отправьте любой текст.\n(Загружено: {photo_count})", reply_markup=cancel_kb)
+        await state.set_state(AdStates.photo)
+        return
+        
     data = await state.get_data()
     user_id = message.from_user.id
     photo_ids = user_photos.get(user_id, [])
@@ -253,7 +308,8 @@ async def process_contact(message: Message, state: FSMContext):
         # Обновляем главное меню после добавления
         global main_menu
         main_menu = create_main_menu()
-        await message.answer("✅ Объявление успешно опубликовано!", reply_markup=main_menu)
+        updated_main_menu = create_main_menu()
+        await message.answer("✅ Объявление успешно опубликовано!", reply_markup=updated_main_menu)
     except Exception as e:
         logging.error(f"Ошибка при добавлении объявления: {e}")
         updated_main_menu = create_main_menu()
@@ -266,9 +322,9 @@ async def process_contact(message: Message, state: FSMContext):
 # --- Поиск по категориям ---
 @dp.message(lambda message: message.text and message.text.startswith("🔍 Все объявления"))
 async def search_by_category_start(message: Message, state: FSMContext):
-    # Пересоздаем клавиатуру с актуальным количеством
-    updated_kb = create_categories_keyboard()
-    await message.answer("Выберите категорию:", reply_markup=updated_kb)
+    # Используем клавиатуру С количеством для поиска
+    search_kb = create_search_categories_keyboard()
+    await message.answer("Выберите категорию:", reply_markup=search_kb)
     await state.set_state(AdStates.search_category)
 
 @dp.message(StateFilter(AdStates.search_category))
@@ -284,8 +340,8 @@ async def process_search_category(message: Message, state: FSMContext):
     selected_category_text = message.text.split(" (")[0]
     # Проверяем, что выбрана категория из списка
     if selected_category_text not in categories_list:
-        updated_kb = create_categories_keyboard()
-        await message.answer("Пожалуйста, выберите категорию из списка.", reply_markup=updated_kb)
+        search_kb = create_search_categories_keyboard()
+        await message.answer("Пожалуйста, выберите категорию из списка.", reply_markup=search_kb)
         return
 
     category = selected_category_text
@@ -312,10 +368,10 @@ async def process_search_category(message: Message, state: FSMContext):
 
     for i, ad in enumerate(ads[:5]):
         text = f"""
-📌 {ad[3]}  # Заголовок
-💬 {ad[4]}      # Описание
+📌 {ad[3]}  
+💬 {ad[4]}      
 
-📞 Контакт: {ad[6]}
+☎ Контакт: {ad[6]}
 📅 Дата: {ad[7]}
         """
         await message.answer(text)
@@ -520,13 +576,28 @@ async def my_ad_edit_field(message: Message, state: FSMContext):
             elif field_name == "contact":
                 current_value = selected_ad[6]
 
-        await message.answer(f"Введите новое значение для '{message.text}':\n(Текущее: {current_value})")
+        await message.answer(f"Введите новое значение для '{message.text}':\n(Текущее: {current_value})", reply_markup=cancel_kb)
     else:
         await message.answer("Пожалуйста, выберите поле из списка.")
 
 # --- Ввод нового значения ---
 @dp.message(StateFilter(AdStates.my_ad_edit_value))
 async def my_ad_edit_value(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        # Возвращаемся к выбору поля
+        edit_kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="🏷️ Заголовок")],
+                [KeyboardButton(text="📝 Описание")],
+                [KeyboardButton(text="📞 Контакт")],
+                [KeyboardButton(text="⬅️ Назад")]
+            ],
+            resize_keyboard=True
+        )
+        await message.answer("Выберите поле для редактирования:", reply_markup=edit_kb)
+        await state.set_state(AdStates.my_ad_edit_field)
+        return
+        
     new_value = message.text
     data = await state.get_data()
     selected_ad = data.get('selected_ad')
